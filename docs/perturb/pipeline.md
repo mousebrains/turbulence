@@ -48,7 +48,7 @@ Each `.p` file is processed through several sub-stages:
 
 7. **Profile-bound adjustment** — Trims each profile's start (prop-wash `top_trim`) and, if enabled, its end (bottom-crash detection).
 
-8. **FP07 calibration** — In-situ calibration of the FP07 thermistors against a reference sensor (JAC_T), using cross-correlation lag estimation. Runs **before** extraction, so the per-profile NetCDFs carry the in-situ calibration rather than factory coefficients: in the data, and in the `T_0`/`beta_1`/`beta_2` attributes of each fitted channel's `T*_dT*` variable, which the chi noise model reads (`bead_coefficients_source` names the fit; a channel the fit refused keeps the embedded values on both).
+8. **FP07 calibration** — In-situ calibration of the FP07 thermistors against a reference sensor (JAC_T), using cross-correlation lag estimation. Runs **before** extraction, so the per-profile NetCDFs carry the in-situ calibration rather than factory coefficients: in the data, and in the `T_0`/`beta_1`/`beta_2` (and, for order 3, `beta_3`) attributes of each fitted channel's `T*_dT*` variable, which the chi noise model reads and inverts exactly (`bead_coefficients_source` names the fit; a channel the fit refused keeps the embedded values on both).
 
 9. **Profile extraction** — Writes the per-profile NetCDF files (with the aligned/calibrated channels and the stratification fields).
 

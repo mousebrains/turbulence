@@ -395,6 +395,10 @@ calibrations:
         recordings); against T1593 (SR1P_501-515) the beads are not distinguishable, see
         its entry. From the swap on, both probes' observed high-frequency floor is
         0.2-0.5x their noise model, against ~1 before it (noise-model).
+        The noise model these floors were judged against took each file's embedded
+        bead coefficients (issue #245: in 2021 rewritten file by file, many not an
+        FP07's), not the in-situ fit the data carry; a re-measurement on #245-fixed
+        products is pending.
 
   - bead: T1593
     deployment: SUNRISE 2021 Pelican
@@ -572,6 +576,10 @@ calibrations:
       notes: >-
         From the T2 swap on, both probes' observed high-frequency floor is 0.2-0.5x
         their noise model (noise-model).
+        The noise model these floors were judged against took each file's embedded
+        bead coefficients (issue #245: in 2021 rewritten file by file, many not an
+        FP07's), not the in-situ fit the data carry; a re-measurement on #245-fixed
+        products is pending.
 
   - bead: T1592
     deployment: SUNRISE 2021 WaltonSmith
@@ -653,6 +661,10 @@ calibrations:
       notes: >-
         Both probes' observed high-frequency floor is 0.3-0.4x their noise model
         (noise-model), as on the Pelican after the T2 swap.
+        The noise model these floors were judged against took each file's embedded
+        bead coefficients (issue #245: in 2021 rewritten file by file, many not an
+        FP07's), not the in-situ fit the data carry; a re-measurement on #245-fixed
+        products is pending.
 
   - bead: T2005
     deployment: SUNRISE 2021 WaltonSmith
@@ -735,6 +747,10 @@ calibrations:
       software_version: "microstructure-tpw 0.4.0 (git v0.4.0-55-g4f84941ddaec)"
       notes: >-
         Noise model 2-3x above the observed floor on both probes (noise-model).
+        The noise model these floors were judged against took each file's embedded
+        bead coefficients (issue #245: in 2021 rewritten file by file, many not an
+        FP07's), not the in-situ fit the data carry; a re-measurement on #245-fixed
+        products is pending.
 
   - bead: T1592
     deployment: SUNRISE 2022 PointSur

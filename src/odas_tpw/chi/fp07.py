@@ -255,6 +255,8 @@ class FP07NoiseConfig:
     beta_1: float = 3000.0  # Steinhart-Hart beta_1 [K]
     T_0: float = 289.3  # Steinhart-Hart reference temperature [K]
     beta_2: float | None = None  # Steinhart-Hart beta_2 [K]
+    beta_3: float | None = None  # Steinhart-Hart beta_3 [K] (exact inversion only)
+    exact_inversion: bool = False  # solve R(T) exactly (an in-situ fit's curve)
 
 
 def _unpack_noise_config(
@@ -277,6 +279,8 @@ def _unpack_noise_config(
     beta_1: float = 3000.0,
     T_0: float = 289.3,
     beta_2: float | None = None,
+    beta_3: float | None = None,
+    exact_inversion: bool = False,
 ) -> dict:
     """Resolve hardware parameters from config dataclass or kwargs."""
     if config is not None:
@@ -298,6 +302,8 @@ def _unpack_noise_config(
             "beta_1": config.beta_1,
             "T_0": config.T_0,
             "beta_2": config.beta_2,
+            "beta_3": config.beta_3,
+            "exact_inversion": config.exact_inversion,
         }
     return {
         "R_0": R_0,
@@ -317,6 +323,8 @@ def _unpack_noise_config(
         "beta_1": beta_1,
         "T_0": T_0,
         "beta_2": beta_2,
+        "beta_3": beta_3,
+        "exact_inversion": exact_inversion,
     }
 
 
@@ -356,6 +364,104 @@ def _noise_f_intermediates(
     return base_f, johnson_gain_f, counts_factor, delta_s
 
 
+def bead_inversion(
+    T_mean: npt.ArrayLike,
+    T_0: float,
+    beta_1: float,
+    beta_2: float | None = None,
+    beta_3: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Exact ``L = ln(R/R_0)`` and ``d(1/T)/dL`` of a bead's polynomial at *T_mean*.
+
+    Solves ``1/T = 1/T_0 + L/beta_1 + L^2/beta_2 [+ L^3/beta_3]`` (the
+    ``convert_therm`` form) for its real roots at each temperature [deg C].
+    The bead's branch is the NTC one, ``d(1/T)/dL > 0`` (R falls as T rises);
+    among its roots the one nearest the order-1 estimate ``beta_1 (1/T - 1/T_0)``
+    is taken, and among all real roots when none is NTC. The two roots of a
+    quadratic share ``|d(1/T)/dL|`` and differ only in R, but a curved fit puts
+    the order-1 estimate on the wrong one: on CASPER 2015 doug CAS_024 the
+    nearest root was 0.04 in L from the file's data, the NTC root inside them.
+
+    Returns ``(L, slope, solved)``; ``solved`` is False (L and slope NaN) where
+    no real root exists, and at a non-finite temperature.
+    """
+    T_K = np.atleast_1d(np.asarray(T_mean, dtype=np.float64)) + 273.15
+    a = [1.0 / T_0, 1.0 / beta_1]
+    for beta in (beta_2, beta_3):
+        a.append(1.0 / beta if beta is not None and np.isfinite(beta) else 0.0)
+    while len(a) > 2 and a[-1] == 0.0:
+        a.pop()
+    poly = np.polynomial.Polynomial(a)
+    dpoly = poly.deriv()
+    L = np.full(T_K.shape, np.nan)
+    for i, tk in enumerate(T_K):
+        if not np.isfinite(tk):
+            continue
+        roots = (poly - 1.0 / tk).roots()
+        real = roots[np.abs(roots.imag) <= 1e-9 * np.maximum(1.0, np.abs(roots.real))].real
+        if real.size == 0:
+            continue
+        ntc = real[dpoly(real) > 0]
+        pool = ntc if ntc.size else real
+        x = float(pool[np.argmin(np.abs(pool - beta_1 * (1.0 / tk - 1.0 / T_0)))])
+        for _ in range(2):  # polish the companion-matrix root
+            d = float(dpoly(x))
+            if d == 0.0:
+                break
+            x -= (float(poly(x)) - 1.0 / tk) / d
+        L[i] = x
+    solved = np.isfinite(L)
+    return L, dpoly(L), solved
+
+
+def _exact_R_and_slope(T_kelvin: np.ndarray, p: dict) -> tuple[np.ndarray, np.ndarray]:
+    """R/R_0 and d(1/T)/dL from :func:`bead_inversion`, for the scale factor.
+
+    Where there is no real root it falls back, with a warning, to the order-1
+    inversion and the first-order beta_2 slope (the ODAS form); R < 0.1 is
+    clamped to 1 as there.
+    """
+    L, slope, solved = bead_inversion(
+        T_kelvin - 273.15, p["T_0"], p["beta_1"], p["beta_2"], p["beta_3"]
+    )
+    unsolved = ~solved & np.isfinite(T_kelvin)
+    if np.any(unsolved):
+        warnings.warn(
+            f"FP07 noise model: the bead's polynomial has no real root at "
+            f"{int(unsolved.sum())} of {unsolved.size} temperatures; those fall back "
+            "to the order-1 inversion",
+            stacklevel=3,
+        )
+        L1 = p["beta_1"] * (1.0 / T_kelvin[unsolved] - 1.0 / p["T_0"])
+        s1 = 1.0 / p["beta_1"]
+        if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
+            s1 = s1 * (1 + 2 * (p["beta_1"] / p["beta_2"]) * L1)
+        L[unsolved] = L1
+        slope[unsolved] = s1
+    R_ratio = np.exp(L)
+    low = R_ratio < 0.1
+    if np.any(low):
+        warnings.warn(
+            f"R_ratio < 0.1 for {int(low.sum())} of {R_ratio.size} T_means "
+            "(possible broken thermistor); clamped to 1.0",
+            stacklevel=3,
+        )
+        R_ratio = np.where(low, 1.0, R_ratio)
+        slope = np.where(low, 1.0 / p["beta_1"], slope)
+    return R_ratio, slope
+
+
+def _inverts_exactly(p: dict) -> bool:
+    """Exact inversion asked for AND a curved polynomial to invert.
+
+    An order-1 curve is inverted exactly by the ODAS form already, so it keeps
+    that code path bit for bit.
+    """
+    return bool(p["exact_inversion"]) and any(
+        p[k] is not None and np.isfinite(p[k]) for k in ("beta_2", "beta_3")
+    )
+
+
 def noise_thermchannel(
     F: npt.ArrayLike,
     T_mean: float,
@@ -378,6 +484,8 @@ def noise_thermchannel(
     beta_1: float = 3000.0,
     T_0: float = 289.3,
     beta_2: float | None = None,
+    beta_3: float | None = None,
+    exact_inversion: bool = False,
     config: FP07NoiseConfig | None = None,
 ) -> np.ndarray:
     """Electronics noise spectrum for FP07 thermistor [(K/s)^2 / Hz].
@@ -441,6 +549,16 @@ def noise_thermchannel(
     beta_2 : float or None
         Steinhart-Hart beta_2 coefficient [K]. When finite, applies
         scale factor correction (MATLAB gradT_noise_odas.m l.335-338).
+    beta_3 : float or None
+        Steinhart-Hart beta_3 coefficient [K]; used only with
+        ``exact_inversion``.
+    exact_inversion : bool
+        Solve the bead's polynomial for R and its slope exactly
+        (:func:`bead_inversion`) instead of the ODAS order-1 inversion with a
+        first-order beta_2 correction. For an in-situ fit's curve (#245): a
+        strongly curved per-file fit (beta_2 comparable to beta_1) put the
+        ODAS form more than 2x off in power on 126 of CASPER 2015 doug's 272
+        fitted channels. An order-1 curve is unchanged.
 
     config : FP07NoiseConfig or None
         Hardware configuration dataclass.  When provided, its fields
@@ -470,6 +588,8 @@ def noise_thermchannel(
         beta_1=beta_1,
         T_0=T_0,
         beta_2=beta_2,
+        beta_3=beta_3,
+        exact_inversion=exact_inversion,
     )
 
     F = np.asarray(F, dtype=np.float64)
@@ -477,22 +597,26 @@ def noise_thermchannel(
 
     # T-dependent terms
     T_kelvin = T_mean + 273.15
-    R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))
-    if R_ratio < 0.1:
-        warnings.warn(
-            f"R_ratio={R_ratio:.4g} < 0.1 (possible broken thermistor at T={T_mean:.1f}°C); "
-            "clamped to 1.0",
-            stacklevel=2,
-        )
-        R_ratio = 1.0
+    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
+    if _inverts_exactly(p):
+        R_exact, slope = _exact_R_and_slope(np.array([T_kelvin], dtype=np.float64), p)
+        R_ratio = float(R_exact[0])
+        scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * R_ratio) * float(slope[0])
+    else:
+        R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))
+        if R_ratio < 0.1:
+            warnings.warn(
+                f"R_ratio={R_ratio:.4g} < 0.1 (possible broken thermistor at "
+                f"T={T_mean:.1f}°C); clamped to 1.0",
+                stacklevel=2,
+            )
+            R_ratio = 1.0
+        # Scale factor
+        scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+        if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
+            scale_factor *= 1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio)
     R_actual = R_ratio * p["R_0"]
     phi_R = 4 * p["K_B"] * R_actual * p["T_K"]
-
-    # Scale factor
-    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
-    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
-    if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
-        scale_factor *= 1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio)
 
     Noise_counts = (base_f + johnson_gain_f * phi_R) * counts_factor
     return Noise_counts * scale_factor**2
@@ -570,6 +694,8 @@ def noise_thermchannel_batch(
     beta_1: float = 3000.0,
     T_0: float = 289.3,
     beta_2: float | None = None,
+    beta_3: float | None = None,
+    exact_inversion: bool = False,
     config: FP07NoiseConfig | None = None,
 ) -> np.ndarray:
     """Vectorized electronics noise for multiple T_mean values.
@@ -611,6 +737,8 @@ def noise_thermchannel_batch(
         beta_1=beta_1,
         T_0=T_0,
         beta_2=beta_2,
+        beta_3=beta_3,
+        exact_inversion=exact_inversion,
     )
 
     F = np.asarray(F, dtype=np.float64)
@@ -620,25 +748,28 @@ def noise_thermchannel_batch(
 
     # --- T-dependent terms ---
     T_kelvin = T_means + 273.15  # (n_est,)
-    R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))  # (n_est,)
-    # Defect: the batch path clamped R_ratio < 0.1 silently while the scalar
-    # noise_thermchannel warns; surface the broken-thermistor condition here too.
-    n_clamped = int(np.count_nonzero(R_ratio < 0.1))
-    if n_clamped:
-        warnings.warn(
-            f"R_ratio < 0.1 for {n_clamped} of {R_ratio.size} T_means "
-            "(possible broken thermistor); clamped to 1.0",
-            stacklevel=2,
-        )
-    R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)
+    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
+    if _inverts_exactly(p):
+        R_ratio, slope = _exact_R_and_slope(np.atleast_1d(T_kelvin), p)
+        scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * R_ratio) * slope
+    else:
+        R_ratio = np.exp(p["beta_1"] * (1.0 / T_kelvin - 1.0 / p["T_0"]))  # (n_est,)
+        # Defect: the batch path clamped R_ratio < 0.1 silently while the scalar
+        # noise_thermchannel warns; surface the broken-thermistor condition here too.
+        n_clamped = int(np.count_nonzero(R_ratio < 0.1))
+        if n_clamped:
+            warnings.warn(
+                f"R_ratio < 0.1 for {n_clamped} of {R_ratio.size} T_means "
+                "(possible broken thermistor); clamped to 1.0",
+                stacklevel=2,
+            )
+        R_ratio = np.where(R_ratio < 0.1, 1.0, R_ratio)
+        # Scale factor
+        scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
+        if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
+            scale_factor = scale_factor * (1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio))
     R_actual = R_ratio * p["R_0"]
     phi_R = 4 * p["K_B"] * R_actual * p["T_K"]  # (n_est,)
-
-    # Scale factor
-    eta = (p["b"] / 2) * 2 ** p["adc_bits"] * p["gain"] * p["e_b"] / p["adc_fs"]
-    scale_factor = T_kelvin**2 * (1 + R_ratio) ** 2 / (2 * eta * p["beta_1"] * R_ratio)
-    if p["beta_2"] is not None and np.isfinite(p["beta_2"]):
-        scale_factor = scale_factor * (1 + 2 * (p["beta_1"] / p["beta_2"]) * np.log(R_ratio))
 
     Noise_counts = (
         base_f[np.newaxis, :] + johnson_gain_f[np.newaxis, :] * phi_R[:, np.newaxis]

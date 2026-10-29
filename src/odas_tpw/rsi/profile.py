@@ -506,8 +506,8 @@ def _channel_attrs(
     # config's. T_0/beta_1/beta_2 are the bead's R(T), with which the noise
     # model converts counts to kelvin, so they must be what the channel's DATA
     # were converted with: perturb's in-situ fit where it fitted the bead
-    # (recorded in channel_info, named by BEAD_COEFFS_SOURCE_ATTR), the
-    # embedded config's otherwise (#245).
+    # (recorded in channel_info, named by BEAD_COEFFS_SOURCE_ATTR, with beta_3
+    # for an order-3 fit), the embedded config's otherwise (#245).
     if dim == "time_fast" and DT_PATTERN.match(ch_name):
         diff_gain, therm_cal = _therm_gradient_config(config, ch_name, channel_info)
         attrs["diff_gain"] = diff_gain

@@ -53,8 +53,13 @@ _DEFAULT_DIFF_GAIN = 0.94
 # config), plus ``diff_gain``, as float variable attrs on each T*_dT*
 # per-profile variable, and the NetCDF branch of _load_therm_channels reads
 # the same keys back (#131 m8, single source of truth). 'b' is included on
-# purpose: noise_thermchannel's eta term consumes it.
-THERM_CAL_ATTR_KEYS = ("e_b", "b", "gain", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0")
+# purpose: noise_thermchannel's eta term consumes it. 'beta_3' comes only with an
+# order-3 in-situ fit (#245): the noise model inverts a fitted curve exactly, so
+# it needs the whole curve; an embedded beta_3 is never read, so a product on the
+# embedded configuration is unchanged.
+THERM_CAL_ATTR_KEYS = (
+    "e_b", "b", "gain", "beta_1", "beta_2", "beta_3", "adc_fs", "adc_bits", "T_0"
+)
 
 # The ``PFile.channel_info`` key under which perturb's in-situ FP07 fit records,
 # on the BASE thermistor channel (T1, not T1_dT1), the coefficients that channel's
@@ -67,6 +72,11 @@ IN_SITU_COEFFS_KEY = "in_situ_coefficients"
 # fit's (its value is the channel's ``calibration`` tag). Written only then, so a
 # product on the embedded configuration is unchanged; absent means embedded.
 BEAD_COEFFS_SOURCE_ATTR = "bead_coefficients_source"
+
+# Chi-file attr (``<prefix>_<channel>``): windows whose fitted curve had no real
+# root at the window's temperature, so the noise model fell back to the order-1
+# inversion there (with a warning). Written only when nonzero.
+BEAD_INVERSION_FALLBACK_ATTR = "bead_inversion_fallback_windows"
 
 
 def resolve_tau_scales(
@@ -280,6 +290,15 @@ def _compute_chi(
     n_therm = len(therm_names)
     diff_gains = data.get("diff_gains", [_DEFAULT_DIFF_GAIN] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
+    # A fitted bead's curve is inverted exactly by the noise model (#245): a
+    # strongly curved per-file fit put the ODAS order-1 inversion more than 2x
+    # off in power on 126 of CASPER 2015 doug's 272 fitted channels. Gated on
+    # the source, so the embedded configuration keeps the ODAS form bit for bit.
+    cal_sources = list(data.get("therm_cal_source") or [None] * n_therm)
+    noise_cal = [
+        {**cal, "exact_inversion": True} if src else cal
+        for cal, src in zip(therm_cal, cal_sources, strict=False)
+    ]
     tau_scales = resolve_tau_scales(therm_names, fp07_tau_scale)
 
     if n_therm == 0:
@@ -390,7 +409,7 @@ def _compute_chi(
             l3_params,
             fp07_model=fp07_model,
             salinity=sal_prof,
-            therm_cal=therm_cal,
+            therm_cal=noise_cal,
             tau_scale=tau_scales,
         )
 
@@ -499,9 +518,12 @@ def _compute_chi(
         # Which thermistors' noise model ran on an in-situ fit's T_0/beta_*
         # rather than the embedded configuration's (#245). Only those: a file
         # on the embedded coefficients is unchanged.
-        for name, src in zip(therm_names, data.get("therm_cal_source") or [], strict=False):
+        for ci, (name, src) in enumerate(zip(therm_names, cal_sources, strict=False)):
             if src:
                 ds.attrs[f"{BEAD_COEFFS_SOURCE_ATTR}_{name}"] = src
+                n_unsolved = _count_unsolved_inversions(l3_chi.temp, noise_cal[ci])
+                if n_unsolved:
+                    ds.attrs[f"{BEAD_INVERSION_FALLBACK_ATTR}_{name}"] = n_unsolved
         if pair_attrs:
             ds.attrs.update(pair_attrs)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
@@ -1213,11 +1235,13 @@ def _extract_therm_cal(
     *fitted* is an in-situ fit's ``{t_0, beta_1[, beta_2[, beta_3]]}``
     (:data:`IN_SITU_COEFFS_KEY`): the bead's R(T), which the channel's data
     were converted with, so it replaces the embedded ``T_0``/``beta_1``/
-    ``beta_2`` WHOLE. An order-1 fit has no quadratic term, so an embedded
-    ``beta_2`` must not survive under it. The noise model has no cubic term:
-    an order-3 fit's ``beta_3`` is left out, as it is for an ``fp07-cal``
-    patched configuration. ``e_b``, ``b``, ``gain`` and ``adc_*`` describe the
-    electronics and stay the embedded values.
+    ``beta_2`` WHOLE and adds ``beta_3`` when it has one. An order-1 fit has
+    no quadratic term, so an embedded ``beta_2`` must not survive under it.
+    ``e_b``, ``b``, ``gain`` and ``adc_*`` describe the electronics and stay
+    the embedded values. Without a fit ``beta_3`` is never read: the noise
+    model's ODAS form has no cubic term (an ``fp07-cal`` patched order-3
+    configuration keeps that limitation), and a fit's curve is inverted
+    exactly instead (:func:`odas_tpw.chi.fp07.bead_inversion`).
     """
     cal = {}
     name = str(ch_cfg.get("name", "?"))
@@ -1239,6 +1263,8 @@ def _extract_therm_cal(
             cal["beta_2"] = float(fitted["beta_2"])
         else:
             cal.pop("beta_2", None)
+        if fitted.get("beta_3") is not None:
+            cal["beta_3"] = float(fitted["beta_3"])
     return cal
 
 
@@ -1274,6 +1300,25 @@ def _bead_coeffs_source(
     assert channel_info is not None  # _bead_fit returned a fit
     tag = channel_info.get(_base_therm_name(name), {}).get("calibration")
     return str(tag) if tag else "in-situ fit"
+
+
+def _count_unsolved_inversions(T_means: Any, cal: Mapping[str, Any]) -> int:
+    """Windows the noise model could not invert exactly (no real root).
+
+    Zero unless *cal* asks for the exact inversion of a curved polynomial;
+    a non-finite temperature is not counted (it gives no noise model either way).
+    """
+    if not cal.get("exact_inversion") or ("beta_2" not in cal and "beta_3" not in cal):
+        return 0
+    from odas_tpw.chi.fp07 import bead_inversion
+
+    T = np.asarray(T_means, dtype=np.float64)
+    if T.size == 0:
+        return 0
+    _, _, solved = bead_inversion(
+        T, cal["T_0"], cal["beta_1"], cal.get("beta_2"), cal.get("beta_3")
+    )
+    return int(np.count_nonzero(~solved & np.isfinite(T)))
 
 
 def _therm_gradient_config(
@@ -1621,7 +1666,8 @@ def _load_therm_channels(
         # beta_2 are the BEAD's R(T), which converts the noise counts to kelvin,
         # and are the coefficients the channel's data were converted with --
         # perturb's in-situ fit where it fitted one (BEAD_COEFFS_SOURCE_ATTR
-        # names it), the embedded config's otherwise (#245).
+        # names it, beta_3 joins them for an order-3 fit, and the noise model
+        # inverts that curve exactly), the embedded config's otherwise (#245).
         missing_attr_vars: list[str] = []
         stale_fit_vars: list[str] = []
 

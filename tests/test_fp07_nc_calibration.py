@@ -74,7 +74,10 @@ def test_attr_keys_cover_extract_therm_cal_output():
         def get(self, key, default=None):
             return 1.0
 
-    assert set(_extract_therm_cal(_AnyCfg())) == set(THERM_CAL_ATTR_KEYS)
+    # beta_3 comes only with an order-3 in-situ fit (#245), never from a config.
+    order_3 = {"t_0": 1.0, "beta_1": 1.0, "beta_2": 1.0, "beta_3": 1.0}
+    assert set(_extract_therm_cal(_AnyCfg())) == set(THERM_CAL_ATTR_KEYS) - {"beta_3"}
+    assert set(_extract_therm_cal(_AnyCfg(), order_3)) == set(THERM_CAL_ATTR_KEYS)
 
 
 class TestAttrWrite:

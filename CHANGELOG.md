@@ -351,19 +351,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **The chi noise model now uses the FP07 coefficients the data were
-  converted with (issue #245).** Under perturb's `fp07.calibrate: true` the
-  channel data were on the per-file in-situ fit while the noise model
-  converted its counts to kelvin with the `.p` file's embedded `T_0`,
-  `beta_1` and `beta_2`. Those are the bead's R(T); the code comments (and
-  the #131 m8 entry below) had called them the electronics. The fit's
-  coefficients now ride on the base channel's `PFile.channel_info`
-  (`in_situ_coefficients`, the configuration's form) into the `T*_dT*`
-  attributes of the per-profile files, which chi reads. An order-1 fit has no
-  quadratic term, so an embedded `beta_2` no longer survives under it; an
-  order-3 fit's `beta_3` is not in the noise model (it has no cubic term), as
-  for an `fp07-cal` patched configuration. A channel the fit refused keeps the
-  embedded values, consistent with its data. The per-profile variable carries
-  `bead_coefficients_source` (the fit's `calibration` tag) and the chi file
+  converted with, and inverts a fitted curve exactly (issue #245).** Under
+  perturb's `fp07.calibrate: true` the channel data were on the per-file
+  in-situ fit while the noise model converted its counts to kelvin with the
+  `.p` file's embedded `T_0`, `beta_1` and `beta_2`. Those are the bead's
+  R(T); the code comments (and the #131 m8 entry below) had called them the
+  electronics. The fit's coefficients now ride on the base channel's
+  `PFile.channel_info` (`in_situ_coefficients`, the configuration's form) into
+  the `T*_dT*` attributes of the per-profile files, which chi reads, `beta_3`
+  included for an order-3 fit. An order-1 fit has no quadratic term, so an
+  embedded `beta_2` no longer survives under it. A channel the fit refused
+  keeps the embedded values, consistent with its data.
+  *Exact inversion.* The ODAS noise model takes R from the order-1 inversion
+  `exp(beta_1 (1/T - 1/T_0))` and corrects the slope to first order in
+  `beta_2`. A per-file fit over a narrow temperature range is often strongly
+  curved (`beta_2` comparable to `beta_1`, `t_0` 165-512 K, `beta_1` < 0),
+  and there that form was off by up to 8x10^5 in power against perturb's own
+  conversion: on CASPER 2015 doug, 126 of 272 fitted channels by more than
+  2x. For a fitted curve the noise model now solves the polynomial for
+  L = ln(R/R_0) (`chi.fp07.bead_inversion`) on the bead's NTC branch
+  (`d(1/T)/dL > 0`, where each file's own counts sit; the root nearest the
+  order-1 estimate was the other one on CASPER 2015 CAS_024 and CAS_035 and
+  Taiwan 2017 CAS_006) and takes the exact slope. It matches a finite
+  difference of the conversion to within 2% on all 1386 curved fitted
+  channels of the scanned deployments (1e-3 in the tests). Where the curve
+  cannot reach the window's temperature (no real root: 2 of the 6930
+  temperatures checked) it falls back to the ODAS form with a WARNING, and the
+  chi file counts those windows (`bead_inversion_fallback_windows_<channel>`).
+  The exact inversion is gated on the fit: an embedded configuration,
+  `fp07-cal` patched or not, keeps the ODAS form and never reads `beta_3`, and
+  an order-1 curve is inverted exactly by the ODAS form already.
+  *Provenance.* The per-profile variable carries `bead_coefficients_source`
+  (the fit's `calibration` tag) and the chi file
   `bead_coefficients_source_<channel>` when the fit supplied them; neither is
   written otherwise. Reading a per-profile file whose data were fitted in
   situ but whose coefficients are the embedded ones (written before this fix)
@@ -385,29 +404,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as resolved signal does in these energetic casts (conjecture: not tested
   against a quieter record). Chi itself barely moved (Method 1): median
   ln(chi_new/chi_old) +0.0002 to +0.0055 per probe and file, 5-95% within
-  −0.10 and +0.21; 26 T2 windows gained a finite chi. *Which products move:*
-  in 2021 the SUNRISE `.p` configurations were rewritten FILE BY FILE, and
-  many of the coefficients are not an FP07's (WaltonSmith SN194 alone:
-  `beta_1` from −230435 to 95481). Read from every file's configuration
-  against one scanned file's fit per bead (approximate: a bead's fits differ
-  by a few percent), the noise model was off by more than 1.25x in T1/T2 of
-  5/4 of Pelican SN194's 17 files (T2: 4 of the 5 after the swap), 18/14 of
-  Pelican SN412's 78, 14/15 of WaltonSmith SN142's 47 and 18/17 of
-  WaltonSmith SN194's 39, from 0.001x to 10^33x. Those deployments need
-  reprocessing. In every other `calibrate: true` deployment scanned (a fit of
-  one or two files each: SUNRISE 2019 and 2022, ARCTERX 2022-2025, ASTRAL
-  2023, CASPER 2017 VMP, Taiwan 2017 VMP and the glider MicroRiders of
-  CASPER, Taiwan and Tanaka) every file stays within 0.8-1.25x (medians
-  0.85-1.04x), except Tanaka 2015-03 (1.25-1.27x, the Johnson term at 3 °C)
-  and Taiwan 2013 husker (T2 1.9x). Not covered: beads no scanned file
-  carried (ARCTERX 2023 Wake SN409, part of SN465, 35 CASPER 2015 files), and
-  deployments whose configurations were not found on SeaChest (RIOT, the
-  ARCTERX 2025 gliders). *Limitation:* the noise model inverts R(T) to first
-  order in `beta_2`, close enough (< 2% in power) for every fit scanned but
-  two: CASPER 2015 doug's CAS_150 (12-19%) and husker FSA_011, whose order-2
-  fit (`beta_1` 115, `beta_2` 145; the parabola's vertex sits at the data)
-  puts it 27-336x off at the file's median temperature. That is a fit perturb
-  should refuse, left for a follow-up.
+  −0.10 and +0.21; 26 T2 windows gained a finite chi. *Curved glider fits,
+  against `main`:* CASPER 2015 CAS_035, noise model 1.47x and 1.36x, median
+  ln chi +0.10 and +0.07, finite windows 147 to 123 and 150 to 123 of 301;
+  Taiwan 2013 husker FSA_011, noise 0.51x and 0.73x, median ln chi +0.59 and
+  +0.27, finite windows 315 to 203 and 294 to 235 of 463 (in 18 sampled lost
+  windows the fitted kB rose 1.7-2.7x and K_max/kB fell to 0.32-0.61); CASPER
+  2015 CAS_063 unchanged (median ln chi 0.00).
+  *Which products move.* In 2021 the SUNRISE `.p` configurations were
+  rewritten FILE BY FILE, and many of the coefficients are not an FP07's
+  (WaltonSmith SN194 alone: `beta_1` from −230435 to 95481). Read from every
+  file's configuration against one or two scanned files' fit per bead
+  (approximate: a VMP bead's order-1 fits differ by a few percent), the noise
+  model was off by more than 1.25x in T1/T2 of 5/4 of Pelican SN194's 17 files
+  (T2: 4 of the 5 after the swap), 18/14 of Pelican SN412's 78, 14/15 of
+  WaltonSmith SN142's 47 and 18/17 of WaltonSmith SN194's 39, from 0.001x to
+  10^33x. The same estimate puts every file of SUNRISE 2019 and 2022 and
+  ARCTERX 2022-2025 (order 1) within 0.8-1.25x. Every file of the order-2
+  deployments, each on its own fit (branch over `main`, at the file's median
+  temperature): Taiwan 2013 husker all 76 fitted channels beyond 1.25x
+  (median 0.53x, 19 beyond 2x), Tanaka 2015-03 50 of 68 (0.76-0.81x), CASPER
+  2015 doug 24 of 272 (0.74-1.82x), Tanaka 2017-07 2 of 6 (one 0.36x; the
+  other 82 of the 88 files scanned had no fit), Tanaka 2015-11-19 1 of 22;
+  within 1.25x everywhere: CASPER 2017 doug (0.99-1.10x), Taiwan 2017 doug
+  (1.02-1.16x), Tanaka 2015-11-13 (0.82-1.11x), Tanaka 2017 sea025
+  (0.99-1.00x), ASTRAL 2023 (0.99-1.07x), CASPER 2017 VMP (1.06-1.12x) and
+  Taiwan 2017 VMP (1.01-1.08x). Not covered: beads no scanned file carried (ARCTERX 2023 Wake
+  SN409, part of SN465), and deployments whose configurations were not found
+  on SeaChest (RIOT, the ARCTERX 2025 gliders). A fit like husker FSA_011's
+  (`beta_1` 115, `beta_2` 145; the curve turns over at 27.08 °C, just above
+  its data) is one perturb's per-file fit should refuse; that is a separate
+  issue.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen
