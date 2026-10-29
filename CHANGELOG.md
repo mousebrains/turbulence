@@ -26,8 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refuses an identified block that breaks its own. One JSON record per pair;
   `fp07-cal registry response` inserts it into an entry as a strictly
   validated `response:` block (text insertion, as `registry add`), and the
-  `.md`/`.csv` views render it with tau at 1 m/s derived under the entry's
-  speed scaling. It is a single-pole-equivalent value: the pole form is not
+  `.md`/`.csv` views render it at the pair's own speed `W_ref` only (W^-1/2
+  across gliders and VMPs is not established, so no tau at 1 m/s). It is a single-pole-equivalent value: the pole form is not
   determined and no external reference anchors the absolute level. Nothing in
   chi processing reads it yet. `fp07-pair fit` is unchanged (pinned by a golden
   test against its pre-change output). The sheet now carries a response on 19

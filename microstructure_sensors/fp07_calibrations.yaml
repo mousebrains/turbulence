@@ -65,8 +65,9 @@
 #     observed/model floor at 60-100 Hz in its quietest usable windows: above 1.25x the
 #     measurement identifies no tau (unmodelled content on one probe biases both taus).
 #   * tau_ms is at W_ref_m_s, the pair's median speed; speed_scaling (the chi tau model,
-#     lueck: tau ~ W^-1/2) maps other speeds onto it. tau at 1 m/s is DERIVED from these
-#     when rendered, never stored. Intervals are 16-84% from a bootstrap over whole
+#     lueck: tau ~ W^-1/2) maps the deployment's other speeds onto it. Nothing converts
+#     tau to another speed: W^-1/2 across the 0.4-1.3 m/s of gliders and VMPs is not
+#     established, so compare taus at similar W_ref. Intervals are 16-84% from a bootstrap over whole
 #     recordings (n_recordings: the .p files; their profiles are not independent), and
 #     they are sampling intervals only: the estimator and band move the level by more.
 #   * identified: false (matched beads, a failing or dead bead, too little data; `reason`

@@ -317,8 +317,9 @@ class ResponseHalf:
 class Response:
     """The bead's FP07 time constant as measured from its pair (`response:`).
 
-    Everything here was MEASURED (``fp07-pair tau``); :attr:`tau_1mps_ms` is
-    derived under :attr:`speed_scaling` and never stored.
+    Everything here was MEASURED (``fp07-pair tau``), at the pair's own speed
+    :attr:`W_ref_m_s`. Nothing converts it to another speed: whether tau ~ W^-1/2
+    holds across the 0.4-1.3 m/s of gliders and VMPs is not established.
     """
 
     method: str
@@ -350,18 +351,6 @@ class Response:
         d = default_rule()
         return {k: (v, d[k]) for k, v in self.rule.items() if k in d and v != d[k]}
 
-    def scale_to(self, W: float) -> float:
-        """tau(W)/tau(W_ref) under :attr:`speed_scaling`."""
-        from odas_tpw.chi.fp07 import fp07_tau
-
-        return float(fp07_tau(W, model=self.speed_scaling)) / float(
-            fp07_tau(self.W_ref_m_s, model=self.speed_scaling))
-
-    @property
-    def tau_1mps_ms(self) -> float | None:
-        """tau at 1 m/s, DERIVED from the measured tau at W_ref under the speed scaling."""
-        return None if self.tau_ms is None else self.tau_ms * self.scale_to(1.0)
-
     def to_dict(self) -> dict[str, Any]:
         def half(h: ResponseHalf) -> dict[str, Any]:
             return {"first": _iso(h.first), "last": _iso(h.last), "n_chi_files": h.n_chi_files,
@@ -378,7 +367,6 @@ class Response:
             "band_Hz": list(self.band_Hz), "identified": self.identified,
             "tau_ms": self.tau_ms,
             "tau_ms_16_84": None if self.tau_ms_16_84 is None else list(self.tau_ms_16_84),
-            "tau_1mps_ms_derived": self.tau_1mps_ms,
             "halves": None if self.halves is None else
             {"first": half(self.halves[0]), "second": half(self.halves[1])},
             "power_ratio": dict(self.power_ratio),
@@ -1802,12 +1790,11 @@ CSV_COLUMNS = (
     "a", "b", "g", "e_b", "adc_fs", "adc_bits",
     "fit_rms_mK", "rms_all_mK", "held_out_mK", "block_sd_mK", "n_blocks",
     "T_min_degC", "T_max_degC", "flags", "software_version", "notes",
-    # The FP07 response (`response:`); tau_1mps_ms is DERIVED (speed_scaling), not stored.
+    # The FP07 response (`response:`), at the pair's own speed W_ref.
     "response_method", "response_partner", "response_first", "response_last",
     "response_n_chi_files", "response_n_recordings", "response_n_windows", "response_W_ref_m_s",
     "response_speed_scaling", "response_band_lo_Hz", "response_band_hi_Hz",
     "response_identified", "response_tau_ms", "response_tau_lo_ms", "response_tau_hi_ms",
-    "response_tau_1mps_ms",
     "response_half1_last", "response_half1_n_chi_files", "response_half1_tau_ms",
     "response_half1_tau_lo_ms", "response_half1_tau_hi_ms",
     "response_half2_first", "response_half2_n_chi_files", "response_half2_tau_ms",
@@ -1835,7 +1822,6 @@ def _response_row(r: Response | None) -> dict[str, Any]:
         "response_identified": r.identified, "response_tau_ms": r.tau_ms,
         "response_tau_lo_ms": None if r.tau_ms_16_84 is None else r.tau_ms_16_84[0],
         "response_tau_hi_ms": None if r.tau_ms_16_84 is None else r.tau_ms_16_84[1],
-        "response_tau_1mps_ms": None if r.tau_1mps_ms is None else round(r.tau_1mps_ms, 2),
         "response_flags": ";".join(r.flags), "response_reason": r.reason,
         "response_rule": ";".join(f"{k}={v:g}" for k, v in r.rule.items()),
         "response_reference_band_lo_Hz": r.reference_band_Hz[0],
@@ -2180,11 +2166,11 @@ def _response_how_to_read() -> list[str]:
       "intervals only: the choice of estimator and band moves the level by more. Otherwise "
       "tau is blank and only the power ratios are recorded.")
     P("")
-    P("**At 1 m/s** the table shows tau scaled from `W_ref` under the entry's "
-      "`speed_scaling` (`lueck`: tau ~ W^-1/2). That column is derived, never stored. For "
-      "comparison, the `lueck` default chi uses is 10 ms at 1 m/s; across the fleet beads "
-      "scatter by a factor ~1.9 (geometric 1 sd) about a median of ~12 ms, which is why "
-      "tau is carried per bead. Nothing in chi processing reads these values yet.")
+    P("**Tau is at `W_ref`**, the pair's median speed, and the sheet does not convert it to "
+      "any other speed. `speed_scaling` (`lueck`: tau ~ W^-1/2) only maps each chi file's "
+      "frequencies onto `W_ref` within one deployment. Whether it holds across the "
+      "0.4-1.3 m/s spanned by gliders and VMPs is not established, so compare taus at "
+      "similar `W_ref`. Nothing in chi processing reads these values yet.")
     P("")
     P("| method | what it does |")
     P("|---|---|")
@@ -2213,16 +2199,15 @@ def _response_section(h: list[Calibration]) -> list[str]:
     P("FP07 time constant, single-pole equivalent over the band (see "
       "[the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:")
     P("")
-    P("| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | "
+    P("| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | "
       "halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | "
       "recordings / chi files / windows | flags |")
-    P("|---|---|---|---|---|---|---|---|---|---|")
+    P("|---|---|---|---|---|---|---|---|---|")
     for i, c in rows:
         r = c.response
         assert r is not None
         tau = ("not identified" if r.tau_ms is None
                else f"**{r.tau_ms:.1f}**{_ci(r.tau_ms_16_84)}")
-        t1 = "—" if r.tau_1mps_ms is None else f"{r.tau_1mps_ms:.1f} ({r.speed_scaling})"
         if r.halves is None:
             halves = "—"
         else:
@@ -2234,7 +2219,7 @@ def _response_section(h: list[Calibration]) -> list[str]:
                            for f0 in RESPONSE_RATIO_F)
         flags = ", ".join(f"`{f}`" for f in r.flags) or "—"
         P(f"| {i} | {r.partner} | {r.W_ref_m_s:.3f} | {r.band_Hz[0]:g}-{r.band_Hz[1]:g} | {tau} | "
-          f"{t1} | {halves} | {ratio} | {r.n_recordings} / {r.n_chi_files} / {r.n_windows} | "
+          f"{halves} | {ratio} | {r.n_recordings} / {r.n_chi_files} / {r.n_windows} | "
           f"{flags} |")
     return out
 

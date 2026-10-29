@@ -240,8 +240,9 @@ decides whether a pair identifies a tau at all are in
 | `noise_floor` | `all.noise_obs_over_model`, this bead's and its partner's (4 significant figures) |
 | `notes` | `--notes` |
 
-Tau at 1 m/s is derived from `tau_ms`, `W_ref_m_s` and `speed_scaling` when
-the views are rendered, and is never stored.
+Tau is stored and rendered at `W_ref_m_s` only. Nothing converts it to another
+speed: whether tau ~ W^-1/2 holds across the 0.4-1.3 m/s of gliders and VMPs is
+not established, so compare taus at similar `W_ref_m_s`.
 
 ### The prior
 

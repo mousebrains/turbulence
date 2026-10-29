@@ -111,7 +111,8 @@ block its output is byte-identical.
 `fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
 An entry may carry a `response:` block, the bead's measured FP07 tau (a bead property
 carried with its calibration); `fp07-cal registry response` inserts it as text from an
-`fp07-pair tau` record, and tau at 1 m/s is derived when rendered, never stored.
+`fp07-pair tau` record. Tau is at the pair's own speed `W_ref` and is never converted to
+another: W^-1/2 across gliders (~0.4 m/s) and VMPs (~1 m/s) is not established.
 
 Facts that are easy to get wrong:
 

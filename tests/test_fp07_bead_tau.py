@@ -462,13 +462,15 @@ def _reciprocal(r):
     return q
 
 
-def test_a_response_parses_and_derives_tau_at_one_meter_per_second():
+def test_a_response_parses_at_its_own_speed_only():
     c = reg.parse(_pair_sheet(_resp())).history("T100")[0]
     r = c.response
     assert r is not None and r.identified and r.tau_ms == 13.0 and r.partner == "T200"
-    assert r.tau_1mps_ms == pytest.approx(13.0 * np.sqrt(0.95))  # lueck: tau ~ W^-1/2
     assert r.halves[1].tau_ms == 15.0
-    assert c.to_dict()["response"]["tau_1mps_ms_derived"] == pytest.approx(r.tau_1mps_ms)
+    d = c.to_dict()["response"]
+    # W^-1/2 across platforms is not established: nothing converts tau to another speed
+    assert d["tau_ms"] == 13.0 and d["W_ref_m_s"] == 0.95
+    assert not any("1mps" in k for k in d)
 
 
 def test_a_response_with_its_partner_reads_the_same_from_both_sides():
@@ -548,7 +550,7 @@ def test_missing_response_key_is_refused():
 def test_unidentified_response_keeps_its_ratios():
     r = _resp(identified=False, tau_ms=None, tau_ms_16_84=None, reason="beads matched")
     c = reg.parse(_pair_sheet(r)).history("T100")[0]
-    assert c.response.tau_1mps_ms is None and c.response.power_ratio[20] == 1.31
+    assert c.response.tau_ms is None and c.response.power_ratio[20] == 1.31
     # one recording: a ratio, but no bootstrap interval
     r["power_ratio_16_84"] = {10: None, 20: None}
     c = reg.parse(_pair_sheet(r)).history("T100")[0]
@@ -583,11 +585,12 @@ def test_a_response_renders_in_both_views():
     md = reg.render_markdown(sheet)
     assert "### FP07 time constant (`response`)" in md
     assert "**The pole form is not determined**" in md
-    assert "| 1 | T200 | 0.950 | 1-25 | **13.0** (12.0-14.0) | 12.7 (lueck) |" in md
+    assert "| 1 | T200 | 0.950 | 1-25 | **13.0** (12.0-14.0) | 11.0 (10.0-12.0)" in md
+    assert "1 m/s [ms]" not in md and "(lueck) |" not in md
     rows = list(csv.DictReader(io.StringIO(reg.render_csv(sheet))))
     (row,) = [r for r in rows if r["bead"] == "T100"]
     assert float(row["response_tau_ms"]) == 13.0
-    assert float(row["response_tau_1mps_ms"]) == round(13.0 * np.sqrt(0.95), 2)
+    assert "response_tau_1mps_ms" not in row
     assert row["response_partner"] == "T200" and row["response_identified"] == "true"
     (other,) = [r for r in rows if r["bead"] == "T200"]
     assert other["response_tau_ms"] == ""

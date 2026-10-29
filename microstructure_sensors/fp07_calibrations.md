@@ -82,7 +82,7 @@ An entry may carry the bead's FP07 time constant, measured by `fp07-pair tau` fr
 
 **Identified or not.** Matched beads give a flat ratio and no tau, and a failing bead (one that loses amplitude, or goes dead) has no time constant to measure. A pair is identified only when the beads differ beyond bootstrap noise at 20 Hz, each tau's 16-84% interval is bounded and spans at most a factor 1.5, the flat gain is below a factor 2, neither bead is dead in any chi file of the span, neither probe's observed floor at 60-100 Hz is more than 1.25x its noise model (`noise_floor`: unmodelled content on one probe biases both taus), and there are enough chi files, recordings and frequency points (the full rule is in the runbook). Each block records the thresholds it was measured with (`rule`), the loader refuses an identified block that breaks its own, and a non-default threshold is named in the notes. The intervals come from resampling whole recordings (`.p` files), and they are sampling intervals only: the choice of estimator and band moves the level by more. Otherwise tau is blank and only the power ratios are recorded.
 
-**At 1 m/s** the table shows tau scaled from `W_ref` under the entry's `speed_scaling` (`lueck`: tau ~ W^-1/2). That column is derived, never stored. For comparison, the `lueck` default chi uses is 10 ms at 1 m/s; across the fleet beads scatter by a factor ~1.9 (geometric 1 sd) about a median of ~12 ms, which is why tau is carried per bead. Nothing in chi processing reads these values yet.
+**Tau is at `W_ref`**, the pair's median speed, and the sheet does not convert it to any other speed. `speed_scaling` (`lueck`: tau ~ W^-1/2) only maps each chi file's frequencies onto `W_ref` within one deployment. Whether it holds across the 0.4-1.3 m/s spanned by gliders and VMPs is not established, so compare taus at similar `W_ref`. Nothing in chi processing reads these values yet.
 
 | method | what it does |
 |---|---|
@@ -142,15 +142,15 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1593 | 1.288 | 1-25 | **10.7** (9.3-11.3) | 12.1 (lueck) | 9.6 (8.6-12.1) [1.55] → 11.5 (10.6-13.7) [1.39] | 1.21 / 1.44 | 43 / 2419 / 88299 | — |
-| 2 | T2005 | 1.024 | 1-25 | **15.2** (14.2-16.1) | 15.4 (lueck) | — [1.76] → — [1.62] | 1.41 / 1.69 | 5 / 819 / 9134 | `noise-model` |
-| 3 | T2005 | 1.035 | 1-25 | **17.5** (15.9-18.9) | 17.8 (lueck) | 19.3 (17.1-21.9) [1.43] → 16.4 (15.0-17.6) [1.62] | 1.33 / 1.54 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
-| 4 | T2005 | 0.946 | 1-25 | **16.7** (15.9-17.7) | 16.3 (lueck) | 14.8 (14.3-15.2) [1.85] → 20.3 (19.6-21.9) [1.60] | 1.42 / 1.77 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
-| 5 | T2005 | 0.935 | 1-25 | not identified | — | — | 1.41 / 1.75 | 1 / 31 / 3191 | `noise-model` |
-| 6 | T2005 | 0.970 | 1-25 | not identified | — | — [0.48] → — [0.33] | 0.70 / 0.41 | 76 / 7557 / 182555 | `noise-model`, `ratio-shift` |
-| 7 | T2007 | 1.077 | 1-25 | not identified | — | — [0.48] → — [0.46] | 0.75 / 0.47 | 3 / 110 / 16004 | `noise-model` |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T1593 | 1.288 | 1-25 | **10.7** (9.3-11.3) | 9.6 (8.6-12.1) [1.55] → 11.5 (10.6-13.7) [1.39] | 1.21 / 1.44 | 43 / 2419 / 88299 | — |
+| 2 | T2005 | 1.024 | 1-25 | **15.2** (14.2-16.1) | — [1.76] → — [1.62] | 1.41 / 1.69 | 5 / 819 / 9134 | `noise-model` |
+| 3 | T2005 | 1.035 | 1-25 | **17.5** (15.9-18.9) | 19.3 (17.1-21.9) [1.43] → 16.4 (15.0-17.6) [1.62] | 1.33 / 1.54 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
+| 4 | T2005 | 0.946 | 1-25 | **16.7** (15.9-17.7) | 14.8 (14.3-15.2) [1.85] → 20.3 (19.6-21.9) [1.60] | 1.42 / 1.77 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
+| 5 | T2005 | 0.935 | 1-25 | not identified | — | 1.41 / 1.75 | 1 / 31 / 3191 | `noise-model` |
+| 6 | T2005 | 0.970 | 1-25 | not identified | — [0.48] → — [0.33] | 0.70 / 0.41 | 76 / 7557 / 182555 | `noise-model`, `ratio-shift` |
+| 7 | T2007 | 1.077 | 1-25 | not identified | — [0.48] → — [0.46] | 0.75 / 0.47 | 3 / 110 / 16004 | `noise-model` |
 
 Notes:
 
@@ -198,10 +198,10 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.288 | 1-25 | **14.2** (12.7-14.9) | 16.1 (lueck) | 13.4 (12.6-16.2) [0.65] → 14.7 (13.7-17.0) [0.72] | 0.82 / 0.69 | 43 / 2419 / 88299 | — |
-| 2 | T1592 | 1.040 | 1-25 | not identified | — | — [0.94] → — [0.72] | 0.93 / 0.82 | 11 / 1538 / 22868 | — |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T1592 | 1.288 | 1-25 | **14.2** (12.7-14.9) | 13.4 (12.6-16.2) [0.65] → 14.7 (13.7-17.0) [0.72] | 0.82 / 0.69 | 43 / 2419 / 88299 | — |
+| 2 | T1592 | 1.040 | 1-25 | not identified | — [0.94] → — [0.72] | 0.93 / 0.82 | 11 / 1538 / 22868 | — |
 
 Notes:
 
@@ -250,13 +250,13 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.024 | 1-25 | **21.8** (20.5-22.9) | 22.1 (lueck) | — [0.57] → — [0.62] | 0.71 / 0.59 | 5 / 819 / 9134 | `noise-model` |
-| 2 | T1592 | 1.035 | 1-25 | **23.1** (20.8-24.9) | 23.6 (lueck) | 24.7 (21.9-27.6) [0.70] → 22.3 (20.6-23.7) [0.62] | 0.75 / 0.65 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
-| 3 | T1592 | 0.946 | 1-25 | **24.9** (24.0-25.7) | 24.2 (lueck) | 23.0 (22.4-23.5) [0.54] → 28.1 (27.4-29.9) [0.62] | 0.70 / 0.57 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
-| 4 | T1592 | 0.935 | 1-25 | not identified | — | — | 0.71 / 0.57 | 1 / 31 / 3191 | `noise-model` |
-| 5 | T1592 | 0.970 | 1-25 | not identified | — | — [2.07] → — [3.04] | 1.42 / 2.44 | 76 / 7557 / 182555 | `noise-model`, `ratio-shift` |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T1592 | 1.024 | 1-25 | **21.8** (20.5-22.9) | — [0.57] → — [0.62] | 0.71 / 0.59 | 5 / 819 / 9134 | `noise-model` |
+| 2 | T1592 | 1.035 | 1-25 | **23.1** (20.8-24.9) | 24.7 (21.9-27.6) [0.70] → 22.3 (20.6-23.7) [0.62] | 0.75 / 0.65 | 38 / 5552 / 78371 | `noise-model`, `ratio-shift` |
+| 3 | T1592 | 0.946 | 1-25 | **24.9** (24.0-25.7) | 23.0 (22.4-23.5) [0.54] → 28.1 (27.4-29.9) [0.62] | 0.70 / 0.57 | 30 / 536 / 37212 | `drift`, `ratio-shift` |
+| 4 | T1592 | 0.935 | 1-25 | not identified | — | 0.71 / 0.57 | 1 / 31 / 3191 | `noise-model` |
+| 5 | T1592 | 0.970 | 1-25 | not identified | — [2.07] → — [3.04] | 1.42 / 2.44 | 76 / 7557 / 182555 | `noise-model`, `ratio-shift` |
 
 Notes:
 
@@ -300,9 +300,9 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T1592 | 1.077 | 1-25 | not identified | — | — [2.10] → — [2.17] | 1.34 / 2.12 | 3 / 110 / 16004 | `noise-model` |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T1592 | 1.077 | 1-25 | not identified | — [2.10] → — [2.17] | 1.34 / 2.12 | 3 / 110 / 16004 | `noise-model` |
 
 Notes:
 
@@ -481,9 +481,9 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2810 | 0.384 | 1-25 | **9.6** (7.5-11.1) | 5.9 (lueck) | 7.2 (6.4-9.1) [1.36] → — [1.32] | 1.12 / 1.32 | 117 / 136 / 79769 | — |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T2810 | 0.384 | 1-25 | **9.6** (7.5-11.1) | 7.2 (6.4-9.1) [1.36] → — [1.32] | 1.12 / 1.32 | 117 / 136 / 79769 | — |
 
 Notes:
 
@@ -522,9 +522,9 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2809 | 0.384 | 1-25 | **11.7** (9.6-13.6) | 7.3 (lueck) | 9.6 (8.9-11.4) [0.74] → — [0.76] | 0.90 / 0.76 | 117 / 136 / 79769 | — |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T2809 | 0.384 | 1-25 | **11.7** (9.6-13.6) | 9.6 (8.9-11.4) [0.74] → — [0.76] | 0.90 / 0.76 | 117 / 136 / 79769 | — |
 
 Notes:
 
@@ -563,9 +563,9 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2813 | 0.441 | 1-25 | not identified | — | 20.8 (18.4-22.4) [0.84] → 15.2 (12.2-17.0) [1.22] | 0.96 / 0.93 | 786 / 786 / 864191 | `ratio-shift` |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T2813 | 0.441 | 1-25 | not identified | 20.8 (18.4-22.4) [0.84] → 15.2 (12.2-17.0) [1.22] | 0.96 / 0.93 | 786 / 786 / 864191 | `ratio-shift` |
 
 Notes:
 
@@ -603,9 +603,9 @@ Coefficients and the bridge constants that define their L:
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
-| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | tau at 1 m/s [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | T2811 | 0.441 | 1-25 | not identified | — | 18.5 (16.2-20.0) [1.18] → 17.4 (14.2-19.3) [0.82] | 1.04 / 1.07 | 786 / 786 / 864191 | `ratio-shift` |
+| # | partner | W_ref [m/s] | band [Hz] | tau at W_ref [ms] | halves [ms] [20 Hz ratio] | power vs partner, 10 / 20 Hz | recordings / chi files / windows | flags |
+|---|---|---|---|---|---|---|---|---|
+| 1 | T2811 | 0.441 | 1-25 | not identified | 18.5 (16.2-20.0) [1.18] → 17.4 (14.2-19.3) [0.82] | 1.04 / 1.07 | 786 / 786 / 864191 | `ratio-shift` |
 
 Notes:
 

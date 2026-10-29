@@ -1164,8 +1164,7 @@ def _response_line(r) -> str:
     if r.tau_ms is None:
         head += f"tau NOT identified ({r.reason})"
     else:
-        head += (f"single-pole-equivalent tau {r.tau_ms:.1f}{ci(r.tau_ms_16_84)} ms "
-                 f"({r.tau_1mps_ms:.1f} ms at 1 m/s under {r.speed_scaling}, derived)")
+        head += f"single-pole-equivalent tau {r.tau_ms:.1f}{ci(r.tau_ms_16_84)} ms at W_ref"
     if r.halves is not None:
         head += "; halves " + " -> ".join(
             "-" if h.tau_ms is None else f"{h.tau_ms:.1f}{ci(h.tau_ms_16_84)}" for h in r.halves)
