@@ -1,9 +1,10 @@
 # `fp07-cal` runbook
 
 FP07 in-situ calibration for a MicroRider carried by a Slocum, against the
-glider's own glider CTD. It is a **pre-pipeline** step: it runs once per
-deployment and hands perturb `.p` files that already carry the right
-coefficients, so perturb itself needs no changes.
+glider's own glider CTD, or for a VMP against its own JAC CT (§8). It is a
+**pre-pipeline** step: it runs once per deployment and hands perturb `.p`
+files that already carry the right coefficients, so perturb itself needs no
+changes.
 
 ```
 raw *.p ───► perturb trim ─► trimmed *.p ─┬─► fp07-cal fit ─► coefficients.json
@@ -65,8 +66,30 @@ Writes `coefficients.json`, a per-channel `*_report.md`, and diagnostics PNGs.
 - **`lag ... — ok` vs `NOT TRUSTWORTHY`.** A glider dive is a monotonic ramp,
   and a shifted straight line is the same line plus a constant, so a raw
   correlation sits at r ≈ 1.0 at *every* lag. The gate is on peak sharpness,
-  never on r. If the lag is not trustworthy, the coefficients are not either,
-  and `patch` will refuse them.
+  never on r: the peak must be interior and must fall by at least 0.10 across
+  the search. If the lag is not trustworthy, the coefficients are not either,
+  and `patch` will refuse them. A search too narrow to show that fall (a VMP's
+  ±1 s) is judged on the peak's curvature and on two halves of the profiles
+  finding it again; see §8.
+- **`REFUSED`.** No coefficients are exported for a channel whose fit
+  mispredicts its own reference by more than 1 K anywhere, or whose curve is
+  not an FP07's (T must fall as L rises over the fitted range). The 1 K gate
+  is judged over the pairs the fit used: pairs its robust loop already
+  rejected as outliers are reported in a `WARNING` (count, worst error, time,
+  pressure, file) and in the record's `outliers_beyond_gate`, but no longer
+  refuse the fit. Nor do they set the fitted range (the report's "do NOT
+  extrapolate" line, the record's `T_range`, `patch`'s extrapolation warning)
+  or the warm/cold folds that choose the order: pairs every order rejects are
+  left out of those. A fit that is not an FP07 curve is refused with
+  `error: "not an FP07 curve"`: typically water with too little temperature
+  range, where a fit to noise can take either sign (an isothermal synthetic
+  gave β₁ = −1.06×10⁵). A `fit.prior` block (§5) lends such a deployment the
+  bead's shape.
+- **`## Notes` in the report.** A requested geometry term that could not be
+  fitted (no profile spans the ~30 dbar the reference gradient needs; the fit
+  is then made without it, and the record has `geometry_skipped`), and
+  non-finite thermistor counts (the record's `thermistor_gaps`; see the
+  gotchas).
 - **the dive/climb split.** Should be ~0. Nonzero means an unremoved lag being
   absorbed into `t_0`. Unavailable if you record only one leg.
 - **the geometry collinearity note.** If it fires, `dz` and the residual lag
@@ -276,8 +299,135 @@ sits from them. The rule and the uncertainty sizes, with their evidence, are in
 `.p` config, remove any legacy `beta` key from that channel: the reader uses
 `beta` before `beta_1`.
 
+## 8. A VMP against its own JAC CT
+
+A VMP carries its reference: the JAC CT on the same logger, sampled on the
+same slow clock as the thermistors. The same commands apply, with a reference
+built from the instrument's own samples and a few settings changed.
+
+**The reference.** Every n-th slow sample of `JAC_T` and `P`, on the
+instrument's own time stamps. A subset is fine; nothing may be interpolated:
+
+```python
+from pathlib import Path
+
+import numpy as np
+import xarray as xr
+
+from odas_tpw.rsi.p_file import PFile
+
+t, T, P = [], [], []
+for path in sorted(Path("VMP").glob("*.p")):
+    pf = PFile(path)
+    ts = pf.start_time.timestamp() + np.asarray(pf.t_slow, dtype=np.float64)
+    t.append(ts[::8])
+    T.append(np.asarray(pf.channels["JAC_T"], dtype=np.float64)[: ts.size][::8])
+    P.append(np.asarray(pf.channels["P"], dtype=np.float64)[: ts.size][::8])
+ds = xr.Dataset({"JAC_T": ("obs", np.concatenate(T)), "P": ("obs", np.concatenate(P))},
+                coords={"time": ("obs", np.concatenate(t))})
+ds["time"].attrs["units"] = "seconds since 1970-01-01"
+ds.to_netcdf("jac_reference.nc")
+```
+
+**The config** differs from the glider template in these blocks:
+
+```yaml
+reference:
+  file: "<CONFIG_DIR>/jac_reference.nc"
+  time_var: "time"
+  value_var: "JAC_T"
+  pressure_var: "P"
+  same_clock: auto        # detected; see below
+pairs:
+  max_gap: 1.0            # [s] the reference is continuous at 8 Hz
+  kernel_width: 0.047     # [s] three slow samples
+  kernel_tau: 0.17        # [s] the JAC T response, 1/(2 pi fc) with the vendor
+                          # relation perturb uses, fc = 0.73 sqrt(W/0.62) Hz,
+                          # at the median fall rate W: 0.17 s at ~1 dbar/s
+  min_speed: 0.0
+profiles:
+  speed_var: null
+  W_min: 0.3              # [dbar/s] a VMP falls at 0.6-1
+  P_min: 3.0
+  min_duration: 20.0
+  direction: down         # the hauled-in ascent is in the body's wake
+lag:
+  max_lag: 1.0            # [s] the lag is ~0.1 s
+  step: 0.015625          # [s] one slow sample
+  detrend_s: 10.0
+```
+
+What then differs from a glider:
+
+- **The clock offset is zero by construction**, and the ±40 s pressure search
+  is skipped. `same_clock: auto` (the default) detects it: within the files'
+  spans, the reference's samples are the instrument's own, each time stamp
+  within 1 µs of a sample time and its pressure within 1 mm of the
+  instrument's `P` there. A separate CTD cannot pass that by accident, and a
+  CTD resampled onto the instrument's grid fails the pressure half. The record
+  says `clock_source`; the coefficients are unaffected either way.
+  `same_clock: true` asserts the zero without checking: `clock_source` then
+  says it was asserted, not measured, and that `clock_offset_s` is NOT a value
+  for perturb's `hotel.time_offset`. On SUNRISE
+  2022 PointSur (77 files) the search took 232 s of a 894 s run, to return
+  −1.3 µs; the temperature lag search (650 s) is the rest.
+- **The lag is trusted on curvature and halves.** The search is ±1 s, where
+  even a perfectly identified peak falls by only 0.002–0.10, below the 0.10
+  the glider gate asks across ±20 s. So a peak that falls by less is trusted
+  when (a) its curvature, read from the contiguous width of the peak, implies
+  a fall of at least 0.10 across ±20 s, and (b) the peak located again on two
+  interleaved halves of the profiles lands within two lag steps of each
+  other. The peak must also be one the grid measures: at least two steps
+  wide, the only top within 1% of the fall anywhere in the search (two lobes
+  are an ambiguity), and no wider than a quarter of the search (a flat top).
+  The record's `lag_resolution` carries the evidence and, when refused, the
+  `problem`. No one test suffices: a glider's mean-removed ramp replicates on
+  both halves (fall 5e-4), a one-step bump on the 1/64 s grid passes the
+  curvature bound, and a flat top or two lobes pass both unless the width is
+  the peak's own. On eight VMP deployments (SUNRISE
+  2019-2022, ARCTERX-2022 and 2025) the falls are 2.3-49 and the halves agree
+  to 0.1-8 ms, while the old rule refused every one of them. A search of
+  ±20 s or more is judged on its fall alone, as before.
+- **The geometry term needs profiles spanning ~30 dbar.** Shorter descents
+  have no reference gradient (on SUNRISE 2021 no descent's pairs span more
+  than 28.3 dbar). `fit.geometry: true` then fits without the term and says
+  so in the report's Notes and the record's `geometry_skipped`, and a
+  `fit.prior` block is consulted as usual.
+- **Reference glitches.** A JAC_T spike is a rejected outlier, reported but no
+  longer refusing the fit (§3). An instrument-wide transient is more than
+  that: on ARCTERX-2025 Interior, JAC_T jumped to 5 °C and P by 3 dbar within
+  0.1 s, with both FP07 counts ramping together. Left in, its pairs are
+  rejected outliers: they refuse nothing, set neither the fitted range nor
+  the order folds, and the curve (order 2, as blanked) stays within 1.7 mK of
+  the one fitted with the event blanked. But the event is in both series the
+  lag is scored on, so it dominates the high-passed score (r 0.99997 →
+  0.986) and moves the lag from +0.105 to +0.131 s; the two halves then
+  disagree by 52 ms and the lag is refused, so `patch` refuses the record.
+  Blank the reference around such an event before fitting.
+
 ## Gotchas worth knowing
 
+- **A non-finite thermistor count costs only the pairs near it.** The single
+  pole that slows the thermistor to the reference restarts after a gap of
+  non-finite counts (a channel shorter than the slow grid, say), with the
+  first five time constants after the restart blanked while it settles. Every
+  pair whose kernel the gap or that blank touches at all is dropped, so no
+  pair is averaged over a shorter window than the rest. Before issue #238 one
+  NaN turned the rest of the file to NaN. The report's Notes and the record's
+  `thermistor_gaps` say what was lost.
+- **The T1 − T2 check uses this run's fitted coefficients**, one set per
+  channel. Each file's embedded set was used before, and where files had been
+  patched one by one those differ by several K at fixed L, so `T1 − T2`
+  stepped at every change: on ARCTERX-2022 Interior (13 sets in 30 files) by
+  up to 2.5 K between files, a per-profile scatter of 1.09 K and a slope of
+  +0.32 K/day; with the fitted sets, 2.5 mK, 0.9 mK and +1.3×10⁻⁴ K/day.
+  With identical nominal coefficients on both beads (osu684, osu685) the old
+  check also read the change in water temperature as `T1 − T2` drift; with
+  fitted ones its slope is 5× (osu685 2025) and 6.5× (osu684 2023) smaller.
+  Both channels' coefficients come from one source, named in the report
+  line: this run's fit when it fitted both, else the files' embedded sets
+  when each is one set across the files, else the check is unavailable with
+  the reason. A fitted T1 is never compared with an embedded T2.
 - **The factory coefficients may be nominal.** On osu685 both probes carried
   identical values despite being physically different beads, so the in-situ fit
   is the *only* calibration they have — worth 2.7 K.

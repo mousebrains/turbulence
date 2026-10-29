@@ -314,11 +314,18 @@ def _wls(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float, float, flo
     return slope, intercept, float(np.sqrt(max(chi2_red, 1.0) / sxx))
 
 
+def _one_coefficient_set(probes: list[ProbeSeries], channel: str) -> bool:
+    """Do all files carry the same embedded coefficients for *channel*?"""
+    sets = [np.asarray(p.factory[channel]) for p in probes if channel in p.factory]
+    return all(c.shape == sets[0].shape and np.array_equal(c, sets[0]) for c in sets[1:])
+
+
 def t1_t2_series(
     probes: list[ProbeSeries],
     *,
     channel_a: str = "T1",
     channel_b: str = "T2",
+    coeffs: dict[str, np.ndarray] | None = None,
 ) -> dict:
     """Per-profile ``mean(T1 - T2)`` over the WHOLE deployment.
 
@@ -329,20 +336,57 @@ def t1_t2_series(
     electronics, the reference, or selection bias in which yos carried CT
     (plan section 8.4).
 
-    Factory coefficients are used deliberately --- this is a *differential*
-    measurement, and the in-situ fit would inject exactly the signal under test.
+    The check needs ONE coefficient set per channel for the whole deployment:
+    a set that changes from file to file steps ``T1 - T2`` at every change, and
+    the slope then measures the patch history rather than the beads.  On
+    SUNRISE and ARCTERX-2022 the embedded sets had been patched per file: on
+    ARCTERX-2022 Interior, 13 sets in 30 files, 6.3 K apart at T1's median L,
+    stepping ``T1 - T2`` by up to 2.5 K between files (issue #238).
+
+    So the two channels' coefficients come from ONE source.  When *coeffs*
+    (``{channel: [a0, a1, ...]}``, the run's fitted coefficients) holds both
+    channels, those are used: a constant set cannot manufacture drift in time
+    --- that is still measured reference-free --- and a fitted pair agrees with
+    the reference at every temperature, so a change in water temperature over
+    the deployment does not leak into ``T1 - T2`` through a coefficient error
+    either.  Otherwise each channel's embedded coefficients are used, but only
+    when each is one set across the files.  Anything else --- including this
+    run's fit for one channel against the other's embedded set, two different
+    calibrations --- leaves the check unavailable, with ``reason``.
+    ``coefficients`` says which source was used: ``"fitted"`` or
+    ``"embedded"``.
     """
+    coeffs = coeffs or {}
+    both = [p for p in probes if channel_a in p.counts and channel_b in p.counts]
+    pair = (channel_a, channel_b)
+    if all(ch in coeffs for ch in pair):
+        source = "fitted"
+    elif all(_one_coefficient_set(both, ch) for ch in pair):
+        source = "embedded"
+    else:
+        missing = [ch for ch in pair if ch not in coeffs]
+        varying = [ch for ch in pair if not _one_coefficient_set(both, ch)]
+        return {
+            "time": np.empty(0), "value": np.empty(0), "n": np.empty(0, dtype=int),
+            "label": np.empty(0, dtype=object), "slope_K_per_day": float("nan"),
+            "available": False, "coefficients": None,
+            "reason": (f"{' and '.join(missing)} {'were' if len(missing) > 1 else 'was'} not "
+                       f"fitted in this run and the embedded coefficients of "
+                       f"{' and '.join(varying)} differ between files, so there is no one "
+                       f"set per channel from one source"),
+        }
     times: list[float] = []
     values: list[float] = []
     counts: list[int] = []
     labels: list[str] = []
-    for p in probes:
-        if channel_a not in p.counts or channel_b not in p.counts:
-            continue
+    for p in both:
         La, ca = log_r(p.counts[channel_a], p.bridge[channel_a])
         Lb, cb = log_r(p.counts[channel_b], p.bridge[channel_b])
-        Ta = temperature(La, p.factory[channel_a])
-        Tb = temperature(Lb, p.factory[channel_b])
+        if source == "fitted":
+            Ta, Tb = temperature(La, coeffs[channel_a]), temperature(Lb, coeffs[channel_b])
+        else:
+            Ta = temperature(La, p.factory[channel_a])
+            Tb = temperature(Lb, p.factory[channel_b])
         diff = np.where(ca | cb, np.nan, Ta - Tb)
         for i, (s, e) in enumerate(p.profiles):
             seg = diff[s : e + 1]
@@ -364,6 +408,7 @@ def t1_t2_series(
         "label": np.array(labels, dtype=object)[order] if labels else np.empty(0, dtype=object),
         "slope_K_per_day": float("nan"),
         "available": bool(t.size),
+        "coefficients": source,
     }
     if t.size > 2:
         t_sorted = np.asarray(out["time"], dtype=np.float64)
