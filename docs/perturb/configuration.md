@@ -762,11 +762,14 @@ instruments:
   were fitted on spectra that already contain the path (ARCTERX-2022's tau
   scales; an `fp07-pair` correction's `ln e`), so stacking corrects the bead
   twice.
-- A file without the bead is untouched. A file with it outside every span is
+- A file without the bead keeps its chi and records only the beads it carries
+  (`fp07_slow_response_serials`). A file with it outside every span is
   computed uncorrected and says so (`fp07_slow_response_applied = 0`,
   `..._reason`); the run summary names such files, and any bead key that
-  matched no thermistor in the files processed. A bead on two channels of one
-  file, or a file whose configuration cannot be read, is an error.
+  matched no thermistor, with the beads it was compared against. A bead on two
+  channels of one file inside its span, or a file whose configuration cannot
+  be read, is an error; outside every span the doubled serial is a
+  placeholder, recorded and otherwise ignored.
 - **Guard.** Each chi file records its own change in median
   ln(S_bead/S_partner) from 0.25 to 2 Hz (32-s windows, 8-s Hann segments of
   the gradient) as `fp07_slow_response_delta_measured_<channel>`, beside the
@@ -776,7 +779,10 @@ instruments:
   file's change is more than 0.10 from the prediction: on 85 healthy T2005
   files the difference was -0.08..+0.01 (5-95%), while a swapped probe flips
   its sign and a faded path sits ~+0.18 off. It never refuses. Files with too
-  few windows for a verdict are named too.
+  few windows for a verdict are named too. Each file's outcome is kept as
+  `chi_NN/<stem>.fp07_slow_response.json` (measured, predicted, windows,
+  verdict, software version), so a rerun that skips the file from its cache
+  repeats its notices; the cache itself ignores the file.
 - Also recorded: `..._bead_`, `..._beta_`, `..._tau_s_ms_`, `..._span_` and
   `..._guard_<channel>` (the verdict), with `fp07_slow_response_model` stating
   the convention. perturb-diag draws the factor into the bead's model curve.

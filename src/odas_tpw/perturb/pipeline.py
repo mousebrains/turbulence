@@ -4135,6 +4135,13 @@ def process_file(
                             diss_ds.close()
                 if slow_outcome is not None:
                     _slow_guard_file_verdicts(slow_outcome, p_path.name)
+                    try:
+                        _write_slow_sidecar(
+                            output_dirs["chi"], output_stem, slow_outcome, p_path.name
+                        )
+                    except OSError as exc:
+                        logger.warning("%s: could not write the fp07_slow_response record: %s",
+                                       p_path.name, exc)
 
     return result
 
@@ -4799,34 +4806,30 @@ def _tally_slow_response(rec: dict, attrs: dict[str, Any], label: str) -> None:
     """Fold one chi product's ``fp07_slow_response_*`` attributes into *rec*.
 
     *rec* is ``result["fp07_slow_response"]`` of :func:`process_file`. The bead
-    serials are known only here, from what chi found on each profile, so this
-    is what lets the run summary say that a configured bead matched nothing.
+    serials are known only here, from what chi found on each profile (every
+    thermistor's, matched or not), so this is what lets the run summary say
+    that a configured bead matched nothing, and what it was compared against.
     """
-    import numpy as np
-
-    from odas_tpw.chi.fp07_slow import ATTR
+    from odas_tpw.chi.fp07_slow import product_summary
 
     rec["profiles"] += 1
-    prefix = f"{ATTR}_bead_"
-    for key, bead in sorted(attrs.items()):
-        if not key.startswith(prefix):
-            continue
-        ch = key[len(prefix):]
+    summary = product_summary(attrs)
+    if summary is None:
+        return
+    for bead in summary["serials"]:
         if bead not in rec["seen"]:
-            rec["seen"].append(str(bead))
-        if f"{ATTR}_beta_{ch}" not in attrs:
-            rec["outside"].append([label, str(bead)])
-            continue
+            rec["seen"].append(bead)
+    for bead in summary["outside"]:
+        rec["outside"].append([label, bead])
+    for a in summary["applied"]:
         # One profile is a few windows at most, too few for the guard: pool
         # the file's profiles (_slow_guard_file_verdicts).
-        pool = rec["pool"].setdefault(f"{bead} {ch}", {
-            "bead": str(bead), "channel": ch, "lo": [], "hi": [],
-            "predicted": float(attrs.get(f"{ATTR}_delta_predicted_{ch}", float("nan"))),
+        pool = rec["pool"].setdefault(f"{a['bead']} {a['channel']}", {
+            "bead": a["bead"], "channel": a["channel"], "lo": [], "hi": [],
+            "predicted": a["predicted"],
         })
-        for side in ("lo", "hi"):
-            vals = attrs.get(f"{ATTR}_guard_lnr_{side}_{ch}")
-            if vals is not None:
-                pool[side].extend(float(v) for v in list(np.atleast_1d(vals)))
+        pool["lo"].extend(a["lo"])
+        pool["hi"].extend(a["hi"])
 
 
 def _slow_guard_file_verdicts(rec: dict, file_label: str) -> None:
@@ -4853,19 +4856,76 @@ def _slow_guard_file_verdicts(rec: dict, file_label: str) -> None:
                            file_label, pool["bead"], pool["channel"], lo.size, verdict)
 
 
+# The file-level slow-path record, one per .p file, beside its chi profiles.
+_SLOW_SIDECAR_SUFFIX = ".fp07_slow_response.json"
+
+
+def _slow_sidecar_path(chi_dir: Path, output_stem: str) -> Path:
+    return Path(chi_dir) / f"{output_stem}{_SLOW_SIDECAR_SUFFIX}"
+
+
+def _write_slow_sidecar(chi_dir: Path, output_stem: str, rec: dict, file_name: str) -> None:
+    """Persist a file's slow-path outcome, its pooled guard verdict included.
+
+    The verdict is a property of the whole .p file (its profiles pooled), so no
+    per-profile product can carry it, and rewriting those products after the
+    fact would race the skip-cache. A JSON sidecar in the chi directory is
+    outside both: the cache marker lists ``{stem}_prof*.nc`` only and the
+    present-output scan and binning read ``*.nc`` only, so it neither validates
+    nor invalidates a cached file. A rerun that skips the file reads it back
+    (:func:`_read_slow_sidecar`), so a detected swap stays in every run's
+    summary, not just the one that computed it.
+    """
+    from odas_tpw._version_info import software_version
+    from odas_tpw.chi.fp07_slow import SLOW_GUARD_MAX, SLOW_GUARD_MIN_WINDOWS
+
+    def clean(v: Any) -> Any:  # strict JSON: NaN -> null
+        if isinstance(v, float):
+            return v if v == v and abs(v) != float("inf") else None
+        if isinstance(v, list):
+            return [clean(x) for x in v]
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        return v
+
+    payload = clean({k: v for k, v in rec.items() if k != "pool"})
+    payload.update({"file": file_name, "software_version": software_version(),
+                    "guard_limit": SLOW_GUARD_MAX, "guard_min_windows": SLOW_GUARD_MIN_WINDOWS})
+    path = _slow_sidecar_path(chi_dir, output_stem)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=1, allow_nan=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_slow_sidecar(chi_dir: Path | None, output_stem: str) -> dict | None:
+    """A cached file's slow-path record, or None when absent or unreadable."""
+    if chi_dir is None:
+        return None
+    try:
+        rec = json.loads(_slow_sidecar_path(chi_dir, output_stem).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict):
+        return None
+    rec["cached"] = True
+    return rec
+
+
 def _slow_response_notices(
     instruments: dict | None, instrument_keys: set[str], outcomes: dict[str, dict]
 ) -> list[str]:
     """Run-summary lines for ``instruments.<key>.fp07_slow_response`` (issue #252).
 
     Four ways the correction does less than the config says: a bead key that
-    matched no thermistor in any profile processed this run (a typo, or the
-    wrong instrument key), files where the bead was present but outside every
-    span (left uncorrected), files whose own 0.25 -> 2 Hz ratio contradicts the
-    configured path (a swapped probe, a faded path; corrected anyway), and
-    files with too few windows for that check. *outcomes* maps a processed file to its
-    ``result["fp07_slow_response"]``. Covers the files processed in THIS run; a
-    key that matches no input file at all is :func:`_instrument_key_notices`'.
+    matched no thermistor in any profile (a typo, or the wrong instrument key),
+    files where the bead was present but outside every span (left uncorrected),
+    files whose own 0.25 -> 2 Hz ratio contradicts the configured path (a
+    swapped probe, a faded path; corrected anyway), and files with too few
+    windows for that check. *outcomes* maps a file's output stem to its
+    ``result["fp07_slow_response"]``, or, for a file the cache skipped, to the
+    record its run left beside the chi products (:func:`_read_slow_sidecar`),
+    so these lines recur on every run. A key that matches no input file at all
+    is :func:`_instrument_key_notices`'.
     """
     from odas_tpw.chi.fp07_slow import SLOW_GUARD_MAX, SLOW_GUARD_MIN_WINDOWS
 
@@ -4885,7 +4945,7 @@ def _slow_response_notices(
             if bead not in seen:
                 lines.append(
                     f"FP07 slow response: instruments.{sn}.fp07_slow_response.{bead} matched no "
-                    f"thermistor in the {n_prof} chi profile(s) of {len(recs)} file(s) this run "
+                    f"thermistor in the {n_prof} chi profile(s) of {len(recs)} file(s) "
                     f"(beads seen: {', '.join(sorted(seen)) or 'none'}), so it was NOT applied. "
                     "The key is the bead serial from the .p configuration."
                 )
@@ -5201,6 +5261,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     file_cachekeys: dict[str, str] = {}
     to_process: list[tuple[Path, str]] = []
     n_skipped = 0
+    skipped: list[Path] = []
     for p in p_files:
         stem = _output_stem(p)
         cachekey = _file_cachekey(p, ext_fp, stage_hashes, volatile_cfg=per_file_volatile)
@@ -5209,6 +5270,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             _marker_path(output_root, stem), cachekey, present_outputs
         ):
             n_skipped += 1
+            skipped.append(p)
         else:
             to_process.append((p, cachekey))
 
@@ -5225,7 +5287,20 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     fp07_outcomes: dict[str, dict] = {}
     strat_outcomes: dict[str, dict] = {}
     exclusion_outcomes: dict[str, dict] = {}
+    # Keyed by output stem, not file name: same-named .p files in different
+    # directories are different files (_source_output_stem).
     slow_outcomes: dict[str, dict] = {}
+    # A file the cache skipped keeps its recorded slow-path outcome, so its
+    # notices (a guard that flagged a swap) recur in every run's summary.
+    slow_cfg_keys = {
+        str(k) for k, v in (config.get("instruments") or {}).items()
+        if isinstance(v, dict) and v.get("fp07_slow_response")
+    }
+    for p in skipped:
+        if _instrument_key(p) in slow_cfg_keys:
+            rec = _read_slow_sidecar(output_dirs.get("chi"), _output_stem(p))
+            if rec is not None:
+                slow_outcomes[_output_stem(p)] = rec
     if jobs == 1:
         for p_path, cachekey in to_process:
             logger.info("Processing %s...", p_path.name)
@@ -5249,7 +5324,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             if isinstance(result, dict) and "probe_exclusions" in result:
                 exclusion_outcomes[p_path.name] = result["probe_exclusions"]
             if isinstance(result, dict) and "fp07_slow_response" in result:
-                slow_outcomes[p_path.name] = result["fp07_slow_response"]
+                slow_outcomes[_output_stem(p_path)] = result["fp07_slow_response"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -5289,7 +5364,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     if isinstance(result, dict) and "probe_exclusions" in result:
                         exclusion_outcomes[p.name] = result["probe_exclusions"]
                     if isinstance(result, dict) and "fp07_slow_response" in result:
-                        slow_outcomes[p.name] = result["fp07_slow_response"]
+                        slow_outcomes[_output_stem(p)] = result["fp07_slow_response"]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's

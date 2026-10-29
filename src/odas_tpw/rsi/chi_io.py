@@ -176,9 +176,11 @@ def _compute_chi(
     on this file's thermistors (read as ``fp07_pair.pair_identity`` reads them)
     whose span contains the file's start_time has ``|H_slow|^2`` divided out of
     its observed and noise spectra; a bead outside every span is recorded and
-    left uncorrected; a file without the bead is untouched. The file's own
-    0.25->2 Hz pair ratio is recorded beside the prediction, with a WARNING
-    when they disagree by more than ``fp07_slow.SLOW_GUARD_MAX``. Valid only on
+    left uncorrected; a file without the bead keeps its chi and records only
+    its beads (``fp07_slow_response_serials``). The file's own 0.25->2 Hz pair
+    ratio is recorded beside the prediction, with a WARNING when they disagree
+    by more than ``fp07_slow.SLOW_GUARD_MAX`` over at least
+    ``fp07_slow.SLOW_GUARD_MIN_WINDOWS`` windows. Valid only on
     calibrated temperature (the path is relative to the DC level an in-situ
     calibration fixes). Refused with ``fp07_tau_scale`` or ``fp07_response``,
     which were both fitted on spectra that already contain the path.
@@ -1371,16 +1373,20 @@ def _apply_slow_response(
 
     The guard's measured change is recorded for every configured bead found on
     the file, corrected or not (a bead outside its spans is still worth a QC
-    number); it warns only where the correction is applied. Nothing is written
-    for a file that carries none of the configured beads.
+    number); it warns only where the correction is applied. A file that carries
+    none of the configured beads gets only ``fp07_slow_response_serials``, the
+    beads it does carry, so a run summary can say what a bead key that matched
+    nothing was compared against; its chi is untouched.
     """
     from odas_tpw.chi import fp07_slow as S
 
+    serials = {f"{S.ATTR}_serials": "/".join(sel.serials)}
     if not sel.applied and not sel.outside:
-        return {}
+        return serials
     n = len(therm_names)
     present = {**{ci: s.bead for ci, s in sel.applied.items()}, **sel.outside}
     attrs: dict[str, Any] = {
+        **serials,
         f"{S.ATTR}_applied": int(bool(sel.applied)),
         f"{S.ATTR}_model": S.MODEL_TEXT,
         f"{S.ATTR}_guard_method": S.GUARD_TEXT,
@@ -1672,13 +1678,33 @@ def load_epsilon_dataset(
     return None
 
 
-def _compute_chi_one(args: tuple) -> tuple[str, int]:
+def slow_response_summary(paths: Sequence[str | Path]) -> dict[str, Any] | None:
+    """The ``fp07_slow_response`` outcome of one chi call, from its first product.
+
+    Every product of one ``_compute_chi`` call carries the same file-level
+    attributes, so the first is enough. None for no products, or products made
+    without the correction configured.
+    """
+    if not paths:
+        return None
+    import netCDF4
+
+    from odas_tpw.chi.fp07_slow import ATTR, product_summary
+
+    with netCDF4.Dataset(str(paths[0])) as ds:
+        attrs = {k: ds.getncattr(k) for k in ds.ncattrs() if k.startswith(ATTR)}
+    return product_summary(attrs)
+
+
+def _compute_chi_one(args: tuple) -> tuple[str, int, dict[str, Any] | None]:
     """Worker for parallel chi computation.
 
     args is (source_path, output_dir, kwargs) or
            (source_path, output_dir, kwargs, epsilon_dir).
     When epsilon_dir is provided, the worker opens the matching epsilon
     file itself (xr.Datasets cannot be pickled across process boundaries).
+    Returns (source, number of products, :func:`slow_response_summary` when
+    ``fp07_slow_response`` is configured, else None).
     """
     if len(args) == 4:
         source_path, output_dir, kwargs, epsilon_dir = args
@@ -1702,4 +1728,5 @@ def _compute_chi_one(args: tuple) -> tuple[str, int]:
                 "using Method 2"
             )
         paths = compute_chi_file(source_path, output_dir, **kwargs)
-    return str(source_path), len(paths)
+    slow = slow_response_summary(paths) if kwargs.get("fp07_slow_response") else None
+    return str(source_path), len(paths), slow

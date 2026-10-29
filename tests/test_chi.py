@@ -1440,8 +1440,9 @@ class TestComputeChiOneWorker:
 
         out = tmp_path / "out"
         out.mkdir()
-        name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}))
+        name, n, slow = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}))
         assert str(name) == str(PROFILE_FILE)
+        assert slow is None  # no fp07_slow_response configured
         assert n >= 1
 
     def test_four_arg_with_existing_eps_file(self, tmp_path):
@@ -1457,7 +1458,7 @@ class TestComputeChiOneWorker:
 
         out = tmp_path / "chi_out"
         out.mkdir()
-        _name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, eps_dir))
+        _name, n, _slow = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, eps_dir))
         assert n >= 1
 
     def test_four_arg_missing_eps_falls_back(self, tmp_path):
@@ -1468,7 +1469,7 @@ class TestComputeChiOneWorker:
         empty_eps.mkdir()
         out = tmp_path / "chi_out"
         out.mkdir()
-        _name, n = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, empty_eps))
+        _name, n, _slow = _compute_chi_one((PROFILE_FILE, out, {"fft_length": 512}, empty_eps))
         assert n >= 1
 
 

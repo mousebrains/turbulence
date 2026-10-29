@@ -903,7 +903,7 @@ def test_cmd_chi_jobs_zero_uses_cpu_count(monkeypatch, sample_p_file, tmp_path):
 
             def submit(self, fn, arg):
                 f = Future()
-                f.set_result((str(sample_p_file), 1))
+                f.set_result((str(sample_p_file), 1, None))  # (source, n, slow summary)
                 return f
 
         return _StubPool()

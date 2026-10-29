@@ -30,14 +30,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (per-window 1.20-1.30x). Under Method 2 the fitted kB moves too, by design:
   on synthetics the corrected chi, kB and epsilon_T recover what a bead
   without the path gives. A file whose bead is outside every span is left
-  uncorrected and says so; a file without the bead is untouched; a bead on two
-  channels or an unreadable configuration is an error. The guard measures the
+  uncorrected and says so; a file without the bead keeps its chi and records
+  only the beads it carries (`fp07_slow_response_serials`); a bead on two
+  channels inside its span, or an unreadable configuration, is an error
+  (outside every span a doubled serial is only recorded: it is a copy-paste
+  placeholder there, and nothing would be applied). The guard measures the
   file's own change in median ln(S_bead/S_partner) from 0.25 to 2 Hz (32-s
   windows of 8-s Hann segments of the gradient), which the chi spectra cannot
   see, and warns when it differs from the configured path's prediction by more
   than 0.10 (set from 85 healthy T2005 files) with at least 40 windows; perturb
   pools a `.p` file's profiles for that verdict, since one SUNRISE cast is one
-  window. It catches a probe swap without a config update and a faded path.
+  window, and records it beside the chi products
+  (`<stem>.fp07_slow_response.json`), so a rerun that skips the file repeats
+  its notices. It catches a probe swap without a config update and a faded
+  path. `rsi-tpw chi` ends with WARNING lines for unmatched bead keys, inputs
+  outside every span, and inputs the guard flagged or could not judge, and one
+  when the inputs are per-profile NetCDFs, which never reach 40 windows.
   Refused beside `fp07_tau_scale` and `fp07_response` (both fitted on spectra
   that already contain the path) and by `rsi-tpw pipeline`. Valid on
   calibrated temperature only: the path is relative to the DC level an in-situ
@@ -45,8 +53,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (applied, bead, beta, `tau_s_ms`, span, the guard's measured and predicted
   change, its verdict and windows); perturb-diag draws the factor into the
   model; the run summary names bead keys that matched nothing, files outside
-  every span, and files the guard flagged or could not judge. Unset, every
-  product and every hash is unchanged.
+  every span, and files the guard flagged or could not judge, keyed by output
+  stem. Spans keep fractions of a second as hashed. Unset, every product and
+  every hash is unchanged.
 - **Each FP07 bead's time constant, measured and carried in the calibration
   sheet (`fp07-pair tau`, `fp07-cal registry response`; closes the last open
   question of issue #189).** `fp07-pair tau` fits one single pole per bead to

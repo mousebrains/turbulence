@@ -123,27 +123,47 @@ class TestParse:
         assert S.parse_slow_response(plain) == S.parse_slow_response({"T2005": SPAN})
         assert isinstance(plain["T2005"][0]["first"], str)
 
+    def test_a_fraction_of_a_second_is_applied_as_hashed(self):
+        # The workers get config_form; it must not truncate what the hash kept.
+        cfg = {"T2005": dict(SPAN, last="2022-06-20T08:30:00.900Z")}
+        (hashed,) = S.canonical_for_hash(cfg)["T2005"]
+        assert hashed["last"] == pytest.approx(1655713800.9, abs=1e-6)
+        (applied,) = S.parse_slow_response(S.config_form(cfg))["T2005"]
+        assert applied.last == pytest.approx(hashed["last"], abs=1e-6)
+        assert S.select({"T2005": [applied]}, ["T1", "T2005"], 1655713800.5).applied
+        assert applied.span_text().endswith("08:30:00.900000+00:00")
+        # whole seconds still print as seconds
+        assert S.config_form({"T2005": SPAN})["T2005"][0]["last"] == "2022-06-20T08:30:00+00:00"
+
 
 class TestSelect:
     SPANS = S.parse_slow_response({"T2005": SPAN})
     T_IN = dt.datetime(2021, 7, 2, tzinfo=dt.UTC).timestamp()
+    T_OUT = dt.datetime(2022, 7, 4, tzinfo=dt.UTC).timestamp()
 
     def test_bead_inside_its_span(self):
         sel = S.select(self.SPANS, ["T1592", "T2005"], self.T_IN)
         assert list(sel.applied) == [1] and not sel.outside
+        assert sel.serials == ["T1592", "T2005"]
 
     def test_bead_outside_every_span(self):
-        t = dt.datetime(2022, 7, 4, tzinfo=dt.UTC).timestamp()
-        sel = S.select(self.SPANS, ["T1592", "T2005"], t)
+        sel = S.select(self.SPANS, ["T1592", "T2005"], self.T_OUT)
         assert not sel.applied and sel.outside == {1: "T2005"}
 
     def test_file_without_the_bead_is_untouched(self):
         sel = S.select(self.SPANS, ["T1592", "T1593"], self.T_IN)
         assert not sel.applied and not sel.outside
+        assert sel.serials == ["T1592", "T1593"]  # still known, for the run summary
 
-    def test_bead_on_two_channels_is_refused(self):
+    def test_bead_on_two_channels_inside_its_span_is_refused(self):
         with pytest.raises(ValueError, match="on 2 thermistor channels"):
             S.select(self.SPANS, ["T2005", "T2005"], self.T_IN)
+
+    def test_bead_on_two_channels_outside_every_span_is_only_recorded(self):
+        # A copy-paste placeholder serial on both beads: nothing would be
+        # applied, so the file keeps its chi.
+        sel = S.select(self.SPANS, ["T2005", "T2005"], self.T_OUT)
+        assert not sel.applied and sel.outside == {0: "T2005", 1: "T2005"}
 
     def test_span_is_inclusive(self):
         (sp,) = self.SPANS["T2005"]
@@ -244,6 +264,23 @@ class TestChiRecoversTruth:
             assert _med_ln(cor.epsilon_T[1], np.full_like(chi_true, EPS)) == pytest.approx(
                 eps_ref, abs=0.04)
             assert _med_ln(unc.epsilon_T[1], np.full_like(chi_true, EPS)) < eps_ref - 0.04
+
+    def test_method2_mle_divides_once(self, synth):
+        """The MLE path takes the factor once: applied twice, chi reads high."""
+        slow, ref, chi_true, _kB = synth
+
+        def run(l3):
+            return process_l4_chi_fit(l3, fit_method="mle")
+
+        cor = _corrected(slow)
+        twice = _corrected(slow)
+        once = twice.slow_factor[1]
+        twice.slow_factor[1] = lambda F: once(F) ** 2
+        b = _med_ln(run(ref).chi[1], chi_true)
+        # measured: ref +0.025, corrected +0.034, uncorrected -0.228, twice +0.297
+        assert _med_ln(run(cor).chi[1], chi_true) == pytest.approx(b, abs=0.03)
+        assert _med_ln(run(slow).chi[1], chi_true) < b - 0.15
+        assert _med_ln(run(twice).chi[1], chi_true) > b + 0.15
 
     def test_method1_invariants(self, synth):
         """Dividing S and N by one e keeps every bin's S/N (Method 1: kB fixed)."""
@@ -406,10 +443,18 @@ class TestApplySlowResponse:
         assert attrs[f"{a}_delta_measured_T2_dT2"] == pytest.approx(_span().ln_change(), abs=0.01)
         assert not hasattr(secs[0][1], "slow_factor")
 
-    def test_no_bead_writes_nothing(self):
+    def test_no_bead_records_only_the_beads_it_carries(self):
         fast, slow = _gradients(seconds=60.0)
         attrs, secs = self._apply(["T1592", "T1593"], fast, slow)
-        assert attrs == {}
+        assert attrs == {f"{S.ATTR}_serials": "T1592/T1593"}
+        assert not hasattr(secs[0][1], "slow_factor")
+
+    def test_same_bead_on_both_channels_outside_its_span_is_recorded(self):
+        fast, slow = _gradients(seconds=60.0)
+        t = dt.datetime(2022, 7, 4, tzinfo=dt.UTC).timestamp()
+        attrs, secs = self._apply(["T2005", "T2005"], fast, slow, t=t)
+        assert attrs[f"{S.ATTR}_applied"] == 0
+        assert attrs[f"{S.ATTR}_bead_T1_dT1"] == attrs[f"{S.ATTR}_bead_T2_dT2"] == "T2005"
         assert not hasattr(secs[0][1], "slow_factor")
 
     def test_guard_skipped_without_exactly_two_thermistors(self):
@@ -439,6 +484,28 @@ def _pfile(t1="T1592", t2="T2005"):
         elif ch.get("name") == "T2":
             ch["sn"] = t2
     return pf
+
+
+@pytest.fixture(scope="module")
+def patched(tmp_path_factory):
+    """The fixture rewritten on disk with real bead serials, T2005 on T2 under
+    ``VMP/`` and on T1 under ``VMPswap/`` (same file name in both)."""
+    if not PROFILE_FILE.exists():
+        pytest.skip("SN479 fixture missing")
+    from odas_tpw.rsi.config_patch import (
+        EditSpec,
+        edit_config_text,
+        read_config_text,
+        write_patched_pfile,
+    )
+
+    root = tmp_path_factory.mktemp("slow_patched")
+    for d, (t1, t2) in {"VMP": ("T1592", "T2005"), "VMPswap": ("T2005", "T1592")}.items():
+        (root / d).mkdir()
+        spec = EditSpec(note="test", author="test", channels={"T1": {"sn": t1}, "T2": {"sn": t2}})
+        new, _ = edit_config_text(read_config_text(PROFILE_FILE), spec, add_keys=True)
+        write_patched_pfile(PROFILE_FILE, root / d / PROFILE_FILE.name, new)
+    return root
 
 
 def _run(pf, **kw):
@@ -482,10 +549,12 @@ class TestChiIo:
 
     def test_without_the_bead_the_product_is_unchanged(self, plain):
         ds = _run(_pfile(), fp07_slow_response={"T9999": IN_SPAN})
-        assert not _slow_attrs(ds)
+        # only the beads it does carry, for a run summary's unmatched-key line
+        assert _slow_attrs(ds) == {f"{S.ATTR}_serials"}
+        assert ds.attrs[f"{S.ATTR}_serials"] == "T1592/T2005"
         for name in plain.data_vars:
             np.testing.assert_array_equal(ds[name].values, plain[name].values)
-        assert set(ds.attrs) == set(plain.attrs)
+        assert set(ds.attrs) == set(plain.attrs) | {f"{S.ATTR}_serials"}
 
     def test_outside_its_span_the_product_is_unchanged_but_says_so(self, plain):
         later = dict(IN_SPAN, first="2025-02-01", last="2025-03-01")
@@ -494,9 +563,15 @@ class TestChiIo:
         assert "outside every configured span" in ds.attrs[f"{S.ATTR}_reason"]
         np.testing.assert_array_equal(ds["chi"].values, plain["chi"].values)
 
-    def test_bead_on_two_channels_is_an_error(self):
+    def test_bead_on_two_channels_is_an_error_inside_its_span(self):
         with pytest.raises(ValueError, match="on 2 thermistor channels"):
             _run(_pfile(t1="T2005", t2="T2005"), fp07_slow_response={"T2005": IN_SPAN})
+
+    def test_bead_on_two_channels_outside_its_span_keeps_the_file(self, plain):
+        later = dict(IN_SPAN, first="2025-02-01", last="2025-03-01")
+        ds = _run(_pfile(t1="T2005", t2="T2005"), fp07_slow_response={"T2005": later})
+        assert ds.attrs[f"{S.ATTR}_applied"] == 0
+        np.testing.assert_array_equal(ds["chi"].values, plain["chi"].values)
 
     @pytest.mark.parametrize("other", [{"fp07_tau_scale": {"T1": 0.5}},
                                        {"fp07_response": ["x.nc"]}])
@@ -617,6 +692,9 @@ class TestPerturbConfig:
         assert sp.span_text() == "2021-06-29T18:00:00+00:00..2022-06-20T08:30:00+00:00"
 
 
+TWO_KEYS = {"T2005": SPAN, "T9999": SPAN}  # one bead key that matches nothing
+
+
 class TestPerturbNotices:
     def _rec(self, **kw):
         rec = {"instrument": "SN194", "configured": ["T2005"], "profiles": 3, "seen": [],
@@ -624,48 +702,75 @@ class TestPerturbNotices:
         rec.update(kw)
         return rec
 
-    def test_tally_reads_the_product_attributes(self):
-        from odas_tpw.perturb.pipeline import _slow_guard_file_verdicts, _tally_slow_response
+    T_IN = dt.datetime(2021, 7, 2, tzinfo=dt.UTC).timestamp()
+    T_OUT = dt.datetime(2022, 7, 4, tzinfo=dt.UTC).timestamp()
 
-        rec = self._rec(profiles=0)
-        a = S.ATTR
-        lo = np.zeros(25)
-        applied = {f"{a}_bead_T2_dT2": "T2005", f"{a}_beta_T2_dT2": BETA,
-                   f"{a}_delta_predicted_T2_dT2": -0.159,
-                   f"{a}_guard_lnr_lo_T2_dT2": lo, f"{a}_guard_lnr_hi_T2_dT2": lo + 0.3}
-        _tally_slow_response(rec, applied, "f_prof001.nc")
-        _tally_slow_response(rec, applied, "f_prof002.nc")  # 50 windows pooled: a verdict
-        _tally_slow_response(rec, {f"{a}_bead_T2_dT2": "T2005"}, "f_prof003.nc")
-        assert rec["profiles"] == 3 and rec["seen"] == ["T2005"]
-        assert rec["outside"] == [["f_prof003.nc", "T2005"]]
+    def _file(self, serials, t, *, swapped=False, seconds=60.0, n_profiles=1):
+        """process_file's record for one .p file, built by the REAL path: chi_io's
+        attributes on each profile, the tally, then the file-level verdict."""
+        from odas_tpw.perturb.pipeline import _slow_guard_file_verdicts, _tally_slow_response
+        from odas_tpw.rsi.chi_io import _apply_slow_response
+
+        spans = S.parse_slow_response(TWO_KEYS)
+        rec = self._rec(instrument="VMP", configured=sorted(TWO_KEYS), profiles=0)
+        fast, slow = _gradients(seconds=seconds)
+        if swapped:  # the slow bead is really on T1
+            fast, slow = slow, fast
+        for k, (l2, l3) in enumerate(_sections(fast, slow, n_profiles)):
+            attrs = _apply_slow_response(S.select(spans, serials, t), spans, [(l2, l3)],
+                                         ["T1_dT1", "T2_dT2"], "f.p")
+            _tally_slow_response(rec, attrs, f"f_prof{k + 1:03d}.nc")
         _slow_guard_file_verdicts(rec, "f.p")
+        return rec
+
+    def test_tally_pools_a_files_profiles(self):
+        # 43 windows split over 6 profiles: no profile has a verdict, the file does
+        rec = self._file(["T1592", "T2005"], self.T_IN, swapped=True, seconds=1400.0,
+                         n_profiles=6)
+        assert rec["profiles"] == 6 and rec["seen"] == ["T1592", "T2005"]
         assert "pool" not in rec
-        ((bead, ch, measured, _predicted, n, verdict),) = rec["file_guard"]
-        assert (bead, ch, n) == ("T2005", "T2_dT2", 50)
-        assert measured == pytest.approx(0.3) and verdict.startswith("WARNING")
-        assert rec["guard"] == [["T2005", "T2_dT2", measured, -0.159, 50]]
+        ((bead, ch, measured, predicted, n, verdict),) = rec["file_guard"]
+        assert (bead, ch) == ("T2005", "T2_dT2") and n >= S.SLOW_GUARD_MIN_WINDOWS
+        assert measured > 0 > predicted and verdict.startswith("WARNING")
+        assert rec["guard"] == [["T2005", "T2_dT2", measured, predicted, n]]
 
     def test_notices(self):
         from odas_tpw.perturb.pipeline import _slow_response_notices
 
-        inst = {"SN194": {"fp07_slow_response": {"T2005": SPAN, "T1593": SPAN}}}
         outcomes = {
-            "a.p": self._rec(configured=["T1593", "T2005"], seen=["T1592", "T2005"],
-                             outside=[["a_prof001.nc", "T2005"]],
-                             file_guard=[["T2005", "T2_dT2", 0.02, -0.159, 40, "WARNING: x"]],
-                             guard=[["T2005", "T2_dT2", 0.02, -0.159, 40]]),
-            "b.p": self._rec(configured=["T1593", "T2005"], seen=["T2005"],
-                             file_guard=[["T2005", "T2_dT2", -0.2, -0.159, 3, "no verdict: 3"]]),
+            "VMP__a": self._file(["T1592", "T2005"], self.T_IN, swapped=True, seconds=1400.0),
+            "VMP__b": self._file(["T1592", "T2005"], self.T_OUT),
+            "VMP__c": self._file(["T1592", "T1593"], self.T_IN),
+            "VMP__d": self._file(["T1592", "T2005"], self.T_IN),
         }
-        lines = _slow_response_notices(inst, {"SN194"}, outcomes)
-        text = "\n".join(lines)
-        assert "fp07_slow_response.T1593 matched no thermistor" in text
-        assert "bead T2005 (instruments.SN194) was on 1 file(s) outside every" in text
-        assert "in 1 file(s) (instruments.SN194) the bead's own 0.25->2 Hz" in text
-        assert "too few windows for a guard verdict" in text and "b.p" in text
+        assert outcomes["VMP__c"]["seen"] == ["T1592", "T1593"]  # no bead, still known
+        inst = {"VMP": {"fp07_slow_response": TWO_KEYS}}
+        text = "\n".join(_slow_response_notices(inst, {"VMP"}, outcomes))
+        assert ("fp07_slow_response.T9999 matched no thermistor in the 4 chi profile(s) of 4 "
+                "file(s) (beads seen: T1592, T1593, T2005)") in text
+        assert "fp07_slow_response.T2005 matched no" not in text
+        assert "bead T2005 (instruments.VMP) was on 1 file(s) outside every" in text
+        assert "configured span, which were NOT corrected: VMP__b" in text
+        assert "in 1 file(s) (instruments.VMP) the bead's own 0.25->2 Hz" in text
+        assert "Files: VMP__a" in text
+        assert "too few windows for a guard verdict" in text and "unnoticed: VMP__d" in text
         # a key matching no input file is _instrument_key_notices'; no chi, nothing checked
-        assert _slow_response_notices(inst, {"VMP"}, outcomes) == []
-        assert _slow_response_notices(inst, {"SN194"}, {}) == []
+        assert _slow_response_notices(inst, {"SN194"}, outcomes) == []
+        assert _slow_response_notices(inst, {"VMP"}, {}) == []
+
+    def test_the_file_record_survives_the_cache(self, tmp_path):
+        from odas_tpw.perturb.pipeline import _read_slow_sidecar, _write_slow_sidecar
+
+        rec = self._file(["T1592", "T2005"], self.T_IN, swapped=True, seconds=1400.0)
+        _write_slow_sidecar(tmp_path, "VMP__a", rec, "a.p")
+        back = _read_slow_sidecar(tmp_path, "VMP__a")
+        assert back["cached"] is True and back["file"] == "a.p"
+        assert back["software_version"] and back["guard_limit"] == S.SLOW_GUARD_MAX
+        for key in ("instrument", "configured", "profiles", "seen", "outside", "guard"):
+            assert back[key] == rec[key]
+        assert back["file_guard"][0][5].startswith("WARNING")
+        assert _read_slow_sidecar(tmp_path, "nope") is None
+        assert _read_slow_sidecar(None, "VMP__a") is None
 
 
 # --- rsi-tpw -----------------------------------------------------------------
@@ -734,6 +839,89 @@ class TestRsi:
             main()
         assert exc.value.code == 2
         assert "does not apply fp07_slow_response" in capsys.readouterr().err
+
+
+    def test_end_of_run_warnings(self, patched, tmp_path, monkeypatch, capsys):
+        import sys
+
+        import yaml
+
+        from odas_tpw.rsi.cli import main
+
+        cfg = tmp_path / "rsi.yaml"
+        cfg.write_text(yaml.safe_dump({"chi": {"fp07_slow_response": {
+            "T2005": IN_SPAN, "T9999": IN_SPAN}}}), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", ["rsi-tpw", "-c", str(cfg), "chi",
+                                          str(patched / "VMP" / PROFILE_FILE.name),
+                                          "-o", str(tmp_path / "out")])
+        main()
+        err = capsys.readouterr().err
+        assert ("WARNING: fp07_slow_response.T9999 matched no thermistor in 1 input(s) "
+                "(beads seen: T1592, T2005)") in err
+        assert "fp07_slow_response.T2005 matched" not in err
+        assert "too few guard windows" in err  # one ~8-minute fixture is < 40 windows
+
+    def test_per_profile_inputs_get_one_line(self):
+        from odas_tpw.rsi.cli import _slow_response_run_warnings
+
+        summ = {"serials": ["T1592", "T2005"], "outside": [],
+                "applied": [{"bead": "T2005", "channel": "T2_dT2", "verdict": "no verdict: 1",
+                             "measured": -0.2, "predicted": -0.159, "n_windows": 1,
+                             "lo": [], "hi": []}]}
+        names = [Path("c_prof001.nc"), Path("c_prof002.nc")]
+        lines = _slow_response_run_warnings({"T2005": SPAN}, {n.name: summ for n in names},
+                                            names)
+        assert len(lines) == 1 and "per-profile NetCDFs" in lines[0]
+        assert _slow_response_run_warnings({"T2005": SPAN}, {"a.p": None}, [Path("a.p")]) == []
+
+
+# --- perturb end to end ----------------------------------------------------------
+
+
+@pytest.mark.skipif(not PROFILE_FILE.exists(), reason="SN479 fixture missing")
+def test_perturb_end_to_end(patched, tmp_path):
+    """Two instrument directories holding same-named files, the bead on T2 in one
+    and on T1 in the other: jobs=1, then a cached rerun."""
+    import xarray as xr
+
+    from odas_tpw.perturb import pipeline as pl
+
+    out = tmp_path / "out"
+    files = [patched / d / PROFILE_FILE.name for d in ("VMP", "VMPswap")]
+
+    def run(inst):
+        return pl.run_pipeline({
+            "files": {"p_file_root": str(patched), "output_root": str(out), "trim": False,
+                      "merge": False},
+            "chi": {"enable": True}, "ctd": {"enable": False}, "parallel": {"jobs": 1},
+            "instruments": inst}, p_files=files)
+
+    assert run({}).ok
+    slow = {"fp07_slow_response": {"T2005": IN_SPAN, "T9999": IN_SPAN}}
+    first = run({"VMP": slow, "VMPswap": slow})
+    assert first.ok
+    dirs = {d.name for d in out.iterdir()}
+    # chi and what embeds it re-versioned; diss and profiles reused
+    assert {"chi_01", "chi_binned_01", "chi_combo_01"} <= dirs
+    assert "diss_01" not in dirs and "profiles_01" not in dirs
+    for d, probe in (("VMP", 1), ("VMPswap", 0)):
+        stem = f"{d}__{PROFILE_FILE.stem}"
+        with (xr.open_dataset(out / "chi_00" / f"{stem}_prof001.nc") as a,
+              xr.open_dataset(out / "chi_01" / f"{stem}_prof001.nc") as b):
+            np.testing.assert_array_equal(b["chi"].values[1 - probe], a["chi"].values[1 - probe])
+            r = np.nanmedian(b["chi"].values[probe] / a["chi"].values[probe])
+            assert 1.2 < r <= (1 - BETA) ** -2 + 0.05
+            assert b.attrs[f"{S.ATTR}_serials"] == ("T1592/T2005" if d == "VMP"
+                                                    else "T2005/T1592")
+        assert (out / "chi_01" / f"{stem}{'.fp07_slow_response.json'}").exists()
+    slow_lines = [n for n in first.notices if n.startswith("FP07 slow response")]
+    text = "\n".join(slow_lines)
+    assert "(beads seen: T1592, T2005)" in text
+    # keyed by output stem: same-named files in two directories are both there
+    assert "unnoticed: VMP__SN479_0006" in text and "unnoticed: VMPswap__SN479_0006" in text
+    # a rerun skips the files, and the recorded outcome says the same again
+    again = run({"VMP": slow, "VMPswap": slow})
+    assert [n for n in again.notices if n.startswith("FP07 slow response")] == slow_lines
 
 
 # --- perturb-diag --------------------------------------------------------------

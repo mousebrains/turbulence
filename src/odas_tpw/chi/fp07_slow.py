@@ -133,7 +133,15 @@ def slow_h2(f: Any, beta: float, tau_s: float) -> np.ndarray:
 
 
 def _iso(t: float) -> str:
-    return datetime.fromtimestamp(float(t), UTC).isoformat(timespec="seconds")
+    """UTC ISO-8601, to the microsecond when the time has a fraction of a second.
+
+    Whole seconds print as seconds. A fraction must survive: :meth:`SlowSpan.config_form`
+    is what workers parse back, and the hash keeps the fraction, so truncating
+    it here would apply a span that differs from the one hashed.
+    """
+    t = float(t)
+    spec = "seconds" if t == math.floor(t) else "microseconds"
+    return datetime.fromtimestamp(t, UTC).isoformat(timespec=spec)
 
 
 @dataclass(frozen=True)
@@ -292,6 +300,7 @@ class SlowSelection:
     applied: dict[int, SlowSpan] = field(default_factory=dict)  # channel index -> span
     outside: dict[int, str] = field(default_factory=dict)  # index -> bead outside every span
     t: float = math.nan  # the file's start time [epoch s]
+    serials: list[str] = field(default_factory=list)  # every thermistor's bead, channel order
 
 
 def select(
@@ -302,26 +311,31 @@ def select(
     *serials* are per thermistor channel, from :func:`odas_tpw.chi.fp07_pair.pair_identity`.
     A bead absent from the file leaves it untouched. A bead on the file outside
     every span is recorded in ``outside`` and not corrected. A bead on two
-    channels is an error: the configuration of that file is wrong, and which
-    channel carries the path cannot be known.
+    channels INSIDE one of its spans is an error: which channel carries the
+    path cannot be known. Outside every span nothing is applied, so it is only
+    recorded (on every such channel): a configuration that writes one serial
+    on both beads is a copy-paste placeholder (``fp07cal`` treats a shared
+    serial as one), and refusing it there would cost the file its chi for
+    nothing.
     """
-    sel = SlowSelection(t=float(t))
     have = [str(s).strip() for s in serials]
+    sel = SlowSelection(t=float(t), serials=have)
     for bead, bead_spans in spans.items():
         hits = [i for i, s in enumerate(have) if s == bead]
-        if len(hits) > 1:
-            raise ValueError(
-                f"fp07_slow_response: bead {bead} is on {len(hits)} thermistor channels of "
-                "this file; its configuration names one bead twice, so which channel carries "
-                "the slow path cannot be known"
-            )
         if not hits:
             continue
         span = next((s for s in bead_spans if s.contains(t)), None)
         if span is None:
-            sel.outside[hits[0]] = bead
-        else:
-            sel.applied[hits[0]] = span
+            for i in hits:
+                sel.outside[i] = bead
+            continue
+        if len(hits) > 1:
+            raise ValueError(
+                f"fp07_slow_response: bead {bead} is on {len(hits)} thermistor channels of "
+                f"this file, inside its span {span.span_text()}; its configuration names one "
+                "bead twice, so which channel carries the slow path cannot be known"
+            )
+        sel.applied[hits[0]] = span
     return sel
 
 
@@ -425,3 +439,40 @@ def guard_verdict(measured: float, predicted: float, n_windows: int) -> str:
             "different partner. Applied anyway"
         )
     return "ok"
+
+
+def product_summary(attrs: Mapping[str, Any]) -> dict[str, Any] | None:
+    """What one chi product's ``fp07_slow_response_*`` attributes say; None if absent.
+
+    ``{"serials": [every thermistor's bead], "outside": [bead, ...], "applied":
+    [{"bead", "channel", "measured", "predicted", "n_windows", "verdict", "lo",
+    "hi"}, ...]}`` -- plain builtins, for a run summary (perturb, rsi-tpw) to
+    pool. ``lo``/``hi`` are the guard's per-window ln ratios.
+    """
+    serials = attrs.get(f"{ATTR}_serials")
+    if serials is None:
+        return None
+    out: dict[str, Any] = {"serials": [s for s in str(serials).split("/") if s],
+                           "outside": [], "applied": []}
+    prefix = f"{ATTR}_bead_"
+    for key in sorted(attrs):
+        if not key.startswith(prefix):
+            continue
+        ch, bead = key[len(prefix):], str(attrs[key])
+        if f"{ATTR}_beta_{ch}" not in attrs:
+            out["outside"].append(bead)
+            continue
+
+        def arr(name: str, _ch: str = ch) -> list[float]:
+            v = attrs.get(f"{ATTR}_guard_lnr_{name}_{_ch}")
+            return [] if v is None else [float(x) for x in np.atleast_1d(v)]
+
+        out["applied"].append({
+            "bead": bead, "channel": ch,
+            "measured": float(attrs.get(f"{ATTR}_delta_measured_{ch}", math.nan)),
+            "predicted": float(attrs.get(f"{ATTR}_delta_predicted_{ch}", math.nan)),
+            "n_windows": int(attrs.get(f"{ATTR}_guard_windows_{ch}", 0)),
+            "verdict": str(attrs.get(f"{ATTR}_guard_{ch}", "")),
+            "lo": arr("lo"), "hi": arr("hi"),
+        })
+    return out

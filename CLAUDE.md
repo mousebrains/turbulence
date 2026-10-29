@@ -334,9 +334,12 @@ Facts that are easy to get wrong:
 
 - **Keyed by BEAD SERIAL, not channel**, read from each file's configuration
   exactly as `fp07_pair.pair_identity` reads it; the span (`first <= start_time
-  <= last`, UTC) is mandatory. A file without the bead is untouched; one with
-  it outside every span is uncorrected and says so; a bead on two channels or
-  an unreadable configuration is an error.
+  <= last`, UTC) is mandatory. A file without the bead keeps its chi (it
+  records `fp07_slow_response_serials`, the beads it does carry, for the run
+  summaries); one with it outside every span is uncorrected and says so. A
+  bead on two channels INSIDE its span, or an unreadable configuration, is an
+  error; outside every span a doubled serial is a placeholder and is only
+  recorded.
 - **Divided from the DATA, in every bin, UNWEIGHTED** (`L3ChiData.slow_factor`,
   before `response_factor`). The noise is unattenuated electronics noise, so
   `S/e = B*H2 + N/e` is exact, and 1/e <= (1-beta)^-2 ~ 1.3 is nearly flat in
@@ -361,7 +364,11 @@ Facts that are easy to get wrong:
   more than 0.10 from the prediction (85 healthy T2005 files: -0.08..+0.01,
   5-95%; the pair's pole difference adds ~-0.03). It needs >= 40 windows: one
   window scatters by ~0.17 at 2 Hz and a SUNRISE cast is one window, so perturb
-  pools a `.p` file's profiles (`guard_lnr_lo/hi` attributes) before judging.
+  pools a `.p` file's profiles (`guard_lnr_lo/hi` attributes) before judging
+  and writes the file's verdict to `chi_NN/<stem>.fp07_slow_response.json`
+  (outside the skip-cache, which lists and scans `*.nc` only); a rerun that
+  skips the file reads it back, so its notices recur. `rsi-tpw chi` prints the
+  same as end-of-run WARNINGs; per-profile `.nc` inputs never reach 40 windows.
   It warns; it never refuses. The measured change is recorded even outside the
   spans.
 

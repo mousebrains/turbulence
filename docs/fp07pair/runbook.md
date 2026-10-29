@@ -512,5 +512,8 @@ After 2022-06-20 PointSur's T2005 changes and is excluded, not corrected.
   -0.08..+0.01 (5-95%); the pair's own pole difference contributes ~-0.03. A
   pair without the path (or a faded one) sits ~+0.18 off, and a swapped probe
   flips the sign. perturb pools a `.p` file's profiles before judging (a
-  SUNRISE cast is one 32-s window) and names flagged files in the run summary.
+  SUNRISE cast is one 32-s window), names flagged files in the run summary,
+  and keeps each file's verdict in `chi_NN/<stem>.fp07_slow_response.json`
+  so a cached rerun names them again. `rsi-tpw chi` ends with the same as
+  WARNING lines; per-profile `.nc` inputs never reach 40 windows.
   The measured change is recorded even where the bead is outside its spans.
