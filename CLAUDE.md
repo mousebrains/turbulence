@@ -130,7 +130,24 @@ Facts that are easy to get wrong:
   monotonic ramp, and a shifted straight line is the same line plus a constant,
   which every correlation removes: on real data raw pressure scored
   `r = 1.000000` at *every* lag over ±30 s. Scores use high-passed series, and
-  a peak at the search boundary is refused.
+  a peak at the search boundary is refused. A peak must fall by 0.10 across
+  the search; a VMP's ±1 s search cannot show that however well its ~0.1 s lag
+  is identified, so a smaller fall in a search narrower than ±20 s (the
+  CONFIGURED `max_lag`: `np.arange` ends a ±20 s, 0.2 s search at
+  19.99999999999993) is trusted only when the peak's curvature implies 0.10
+  over ±20 s **and** two interleaved halves of the profiles find it within two
+  lag steps. The curvature comes from the CONTIGUOUS width around the peak,
+  which must be ≥ 2 steps, the only top within 1%, and ≤ ¼ of the search: a
+  mean-removed ramp replicates, a one-step bump passes the curvature bound on
+  a 1/64 s grid, and two lobes or a flat top pass a width-based tolerance.
+- **A VMP calibrates against its own JAC CT** (runbook §8): a reference of the
+  instrument's own slow samples, `profiles.direction: down`. The clock search
+  is then skipped (`reference.same_clock: auto` detects the instrument's own
+  timestamps AND pressure), and the 1 K export gate ignores pairs the robust
+  fit already rejected — one 4.2 K event had refused SUNRISE 2022 PointSur.
+  Rejected pairs also set neither `T_range`/`L_range` nor the held-out folds.
+  `same_clock: true` ASSERTS the zero: never copy that `clock_offset_s` into
+  perturb's `hotel.time_offset`.
 - **`beta_2 = 0` does not delete a quadratic term** — the config value is a
   reciprocal, so zero means an infinite term and `convert_therm` rejects it with
   a named `ValueError` (it raised a bare `ZeroDivisionError` before issue #180).

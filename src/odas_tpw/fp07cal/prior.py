@@ -54,6 +54,7 @@ from odas_tpw.fp07cal.fit import (
     fit_calibration,
     held_out_errors,
     shipped_fit,
+    temperature_folds,
 )
 from odas_tpw.fp07cal.pairs import PairSet
 
@@ -447,8 +448,12 @@ def choose(
     orders: tuple[int, ...],
     robust: bool,
     geometry: bool,
+    exclude: np.ndarray | None = None,
 ):
     """The prior's shape against the full fit; returns ``(fit, geo, record)``.
+
+    *exclude* is :func:`odas_tpw.fp07cal.fit.outlier_screen`'s mask, the same
+    one the order was chosen with: those pairs are left out of the folds.
 
     *full_fit*/*full_geo* are what ``fp07-cal fit`` would have shipped without
     a prior; *orders* the full orders it chose among (``(1, 2, 3)`` for
@@ -494,7 +499,8 @@ def choose(
         fitters[OFFSET] = lambda sub: shipped_fit(sub, robust=robust, use_geometry=geometry,
                                                   fixed_terms=shape)
     held, n_folds = held_out_errors(
-        pairs, fitters, min_train=max([o + 5 for o in orders] + [5])
+        pairs, fitters, min_train=max([o + 5 for o in orders] + [5]),
+        folds=temperature_folds(pairs, exclude),
     )
     resid = {n: np.asarray(f.residual_K, dtype=np.float64) for n, (f, _g) in fits.items()}
     common = (np.logical_and.reduce([np.isfinite(r) for r in resid.values()])

@@ -48,6 +48,13 @@ class FitResult:
     lag: float = float("nan")
     corr: float = float("nan")
     kept: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
+    outlier: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
+    """Pairs the robust loop REJECTED: in the design, but beyond ``robust_sigma``.
+
+    Not simply ``~kept``: the joint geometry fit also leaves out pairs with no
+    reference gradient, which it never judged.  The export gate is evaluated
+    over every pair but these (issue #238).
+    """
     fixed_terms: dict[str, float] | None = None
     """The ``beta`` terms when the shape was HELD FIXED and only ``t_0`` fitted.
 
@@ -218,14 +225,19 @@ def fit_calibration(
         condition=cond,
         rms_K=rms,
         residual_K=resid_K,
-        T_range=pairs.T_range,
-        L_range=(float(np.min(L)), float(np.max(L))),
+        # The range the fit covers is that of the pairs it KEPT: a reference
+        # glitch the robust loop threw out must not widen the "do not
+        # extrapolate" range, the patch-time validity verdict, the sheet's
+        # valid_T_degC or the NTC check (issue #238 review).
+        T_range=(float(np.min(pairs.T_ref[keep])), float(np.max(pairs.T_ref[keep]))),
+        L_range=(float(np.min(L[keep])), float(np.max(L[keep]))),
         dive_climb_split_K=split,
         beta1_bracket=bracket,
         channel=pairs.channel,
         lag=pairs.lag,
         corr=pairs.corr,
         kept=keep,
+        outlier=~keep,
         fixed_terms=None if fixed_terms is None else {
             k: float(fixed_terms[k]) for k in _BETA_KEYS if k in fixed_terms
         },
@@ -260,6 +272,7 @@ def select_order(
     candidates: tuple[int, ...] = (1, 2, 3),
     robust: bool = True,
     use_geometry: bool = False,
+    exclude: np.ndarray | None = None,
 ) -> tuple[int, dict]:
     """Pick the polynomial order by **out-of-sample** error, not by in-sample fit.
 
@@ -285,6 +298,9 @@ def select_order(
     fit is the joint geometry fit, so is each fold's (``use_geometry``),
     otherwise the order chosen can be optimal for a model nobody runs.
 
+    *exclude* (:func:`outlier_screen`) leaves the deployment's glitches out of
+    the folds, so they neither set the split nor dominate a held-out error.
+
     Measured on osu685 (24 degC of range, ~48k pairs):
 
     ======  ==========  ===========================
@@ -301,7 +317,7 @@ def select_order(
     test exists to catch (its t-statistic of 10 would have called it
     "significant").
     """
-    folds = temperature_folds(pairs)
+    folds = temperature_folds(pairs, exclude)
     if folds is None:
         return min(candidates), {}
     scores: dict[int, dict] = {}
@@ -350,18 +366,55 @@ def shipped_fit(
     return fit_calibration(pairs, order=order, robust=robust, fixed_terms=fixed_terms)
 
 
-def temperature_folds(pairs: PairSet) -> tuple | None:
+def temperature_folds(pairs: PairSet, exclude: np.ndarray | None = None) -> tuple | None:
     """``((train, test), (train, test))``: the warm and cold halves of the range.
 
     Split at the middle of the temperature RANGE, not the median (see
     :func:`select_order`).  ``None`` when no reference temperature is finite.
+
+    *exclude* (from :func:`outlier_screen`) leaves pairs out of both the split
+    and every fold: a reference glitch at 2 degC would otherwise set the
+    middle of a 13-21 degC deployment and, in a test half, dominate its error.
     """
     T = np.asarray(pairs.T_ref, dtype=np.float64)
-    fin = T[np.isfinite(T)]
+    ok = np.isfinite(T)
+    if exclude is not None and np.size(exclude) == T.size:
+        ok = ok & ~np.asarray(exclude, dtype=bool)
+    fin = T[ok]
     if fin.size == 0:
         return None
     mid = 0.5 * (float(np.min(fin)) + float(np.max(fin)))
-    return ((mid <= T, mid > T), (mid > T, mid <= T))
+    if exclude is None:
+        return ((mid <= T, mid > T), (mid > T, mid <= T))
+    return ((ok & (mid <= T), ok & (mid > T)), (ok & (mid > T), ok & (mid <= T)))
+
+
+def outlier_screen(
+    pairs: PairSet,
+    *,
+    orders: tuple[int, ...] = (1, 2, 3),
+    robust: bool = True,
+    use_geometry: bool = False,
+) -> np.ndarray:
+    """Pairs that the shipped fit at EVERY order in *orders* rejects as outliers.
+
+    A glitch in the reference or the thermistor, as opposed to a shape one
+    order cannot follow: order 1 over a glider's 24 degC rejects the ends of
+    the range, order 3 does not, so only a pair all of them reject is left out
+    of the held-out folds (:func:`temperature_folds`).  All False without the
+    robust loop, or when no order can be fitted.
+    """
+    out: np.ndarray | None = None
+    if robust:
+        for o in orders:
+            try:
+                f = shipped_fit(pairs, order=o, robust=True, use_geometry=use_geometry)
+            except Exception:
+                continue
+            m = (f.outlier if f.outlier.size == len(pairs)
+                 else np.zeros(len(pairs), dtype=bool))
+            out = m.copy() if out is None else out & m
+    return out if out is not None else np.zeros(len(pairs), dtype=bool)
 
 
 def held_out_error(

@@ -71,8 +71,18 @@ def fit_text(
     t1t2: dict | None = None,
     min_corr: float = 0.7,
     prior: dict | None = None,
+    clock_note: str | None = None,
+    notes: list[str] | None = None,
+    extra_warnings: list[str] | None = None,
 ) -> str:
-    """The per-channel report.  *prior* is the ``fit.prior`` record, when there is one."""
+    """The per-channel report.  *prior* is the ``fit.prior`` record, when there is one.
+
+    *clock_note* replaces the measured clock offset when it is zero by
+    construction (the reference is on the instrument's clock).  *notes* (a
+    skipped geometry term, thermistor gaps) and *extra_warnings* (outliers the
+    export gate left out) are rendered only when given, so a report none of
+    them apply to is unchanged.
+    """
     cfgeq = fit.config_equivalent
     lo, hi = fit.beta1_bracket
     span = (
@@ -81,7 +91,7 @@ def fit_text(
         else float("nan")
     )
 
-    warn: list[str] = []
+    warn: list[str] = [f"**{w[0].upper()}{w[1:]}.**" for w in (extra_warnings or [])]
     if np.isfinite(fit.corr) and abs(fit.corr) < min_corr:
         warn.append(
             f"**Lag correlation |r| = {abs(fit.corr):.3f} is below the {min_corr:g} "
@@ -124,6 +134,8 @@ def fit_text(
         lines += ["## ⚠ Warnings", ""] + [f"- {w}" for w in warn] + [""]
     else:
         lines += ["All diagnostic gates passed.", ""]
+    if notes:
+        lines += ["## Notes", ""] + [f"- {n}" for n in notes] + [""]
 
     lines += [
         "## Diagnostics (read these first)",
@@ -143,7 +155,14 @@ def fit_text(
         f"| fitted T range | {T_lo:.3f} .. {T_hi:.3f} degC | do NOT extrapolate beyond |",
         f"| deployment span | {span:.2f} d | |",
     ]
-    if clock_offset and np.isfinite(clock_offset[0]):
+    if clock_note:
+        lines.append(f"| clock offset | 0 s | {clock_note} |")
+        if np.isfinite(fit.lag):
+            lines.append(
+                f"| residual thermal lag | {fit.lag:+.2f} s | the total lag: with no clock "
+                f"offset it is all sensor response |"
+            )
+    elif clock_offset and np.isfinite(clock_offset[0]):
         co, cr = clock_offset
         lines.append(
             f"| clock offset (P vs P) | {co:+.2f} s (r={cr:.4f}) | "
@@ -188,12 +207,17 @@ def fit_text(
                 )
         if t1t2 is not None:
             verdict = corroborates(stab, t1t2)
+            source = {"fitted": "this run's fitted coefficients",
+                      "embedded": "the files' embedded coefficients, one set per channel",
+                      }.get(t1t2.get("coefficients") or "")
             if verdict:
-                lines += ["", f"- **T1-T2 check:** {verdict}"]
+                lines += ["", f"- **T1-T2 check** (with {source}): {verdict}" if source
+                          else f"- **T1-T2 check:** {verdict}"]
             elif not t1t2.get("available"):
                 lines += [
                     "",
-                    "- **T1-T2 check unavailable** (single thermistor). The blind "
+                    f"- **T1-T2 check unavailable** "
+                    f"({t1t2.get('reason') or 'single thermistor'}). The blind "
                     "spot — drift on the yos with no CT — is uncovered, so treat "
                     "any drift conclusion as provisional.",
                 ]

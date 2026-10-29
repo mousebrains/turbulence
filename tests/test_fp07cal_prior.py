@@ -289,6 +289,25 @@ def test_geometry_on_the_offset_fit_is_joint(narrow, sheet, tmp_path):
     assert c["geometry"] is not None and np.isfinite(c["geometry"]["dz_m"])
 
 
+def test_short_profiles_skip_geometry_and_still_consult_the_prior(sheet, tmp_path):
+    """Profiles under 30 dbar have no reference gradient: joint_fit raised and stopped
+    the run before the prior was consulted (issue #238, SUNRISE 2021 at ~22 dbar).
+    The geometry term is skipped instead, and the prior decides as usual."""
+    cfg = SynthConfig(n_yos=16, yo_seconds=1200.0, fs=4.0, ct_every_n=1, P_max=20.0,
+                      thermocline_dbar=8.0, T_surface=29.2, T_deep=27.2,
+                      files_per_deployment=4, seed=7)
+    probes, ref, _ = make_deployment(cfg, coeffs=POLY, channels=("T1",))
+    for p in probes:
+        p.instrument_sn, p.probe_sn = "7", {"T1": "T100"}
+    c = _run(probes, ref, tmp_path / "o", prior={"sheet": str(sheet)},
+             geometry=True)["channels"]["T1"]
+    assert c["geometry"] is None and "30 dbar" in c["geometry_skipped"]
+    p = c["prior"]
+    assert p["status"] == "used" and p["chosen_kind"] == "offset"  # 2 K: narrow
+    assert all(cand.get("error") is None for cand in p["candidates"].values())
+    assert abs(_mK_at(c["coefficients"], 28.0)) < 1.0
+
+
 def test_patch_takes_an_offset_only_record_unchanged(narrow, sheet, tmp_path):
     probes, ref, _ = narrow
     res = _run(probes, ref, tmp_path / "o", prior={"sheet": str(sheet), "mode": "offset"})

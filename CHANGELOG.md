@@ -301,6 +301,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
+  fitting VMP beads against the instrument's own reference. On three glider
+  deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen
+  orders and lag-trust decisions are unchanged; the record's held-out scores
+  are lower (item 1's fold screen), and the report's T1 − T2 line and the
+  figure's stability panel change (item 5).
+  1. *The 1 K export gate counted pairs the robust fit had already
+     rejected.* One 4.2 K reference event refused SUNRISE 2022 PointSur, fit
+     rms 6-7 mK, on both channels. The gate is now judged over every pair but
+     the robust loop's outliers (an unidentified fit mispredicts those it kept
+     too, so the issue #180 F20 case is still refused); outliers beyond 1 K
+     are reported in a `WARNING`, the report and the record's
+     `outliers_beyond_gate`. Nor do rejected pairs set the fitted range
+     (`T_range`/`L_range`: the report's do-not-extrapolate line, `patch`'s
+     validity verdict, the sheet's `valid_T_degC`, the NTC check below) or the
+     warm/cold folds that choose the order, from which pairs every order (1-3)
+     rejects are left out: three 2 °C reference samples in 13-21 °C water had
+     exported `T_range` [2.0, 21.0]. A fit that is not an FP07 curve (T not
+     falling as L rises over its fitted range) is now refused at export,
+     `error: "not an FP07 curve"`: without a prior, an isothermal synthetic
+     had exported β₁ = −1.06×10⁵.
+  2. *The lag-trust gate refused every VMP lag.* It asks a peak to fall by
+     0.10 across the search, which a glider's ±20 s window shows and a VMP's
+     ±1 s cannot. A smaller fall is now trusted when the peak's curvature,
+     from the contiguous width around the peak (taken at its grid lower
+     bound), implies 0.10 across ±20 s and two interleaved halves of the
+     profiles find the peak again within two lag steps. The peak must be
+     resolved (at least two steps wide), the only top within 1% of the fall,
+     and no wider than a quarter of the search: two lobes, a flat top and a
+     one-step bump on the 1/64 s grid are refused. Only searches narrower than
+     ±20 s qualify, judged on the configured `max_lag`; a wider one measures
+     the fall itself and is judged as before. On eight VMP deployments the
+     implied fall is 2.3-49, the peaks 5-12 steps wide, and the halves agree to
+     0.1-8 ms, so every lag is trusted and `patch` accepts where it refused all
+     eight; a glider's mean-removed ramp (the plateau the gate exists for)
+     gives 1.4×10⁻⁴-5.2×10⁻⁴ and stays refused. The record carries
+     `lag_resolution` (with any `problem`) when the new rule decides.
+  3. *The geometry term crashed on profiles under ~30 dbar* (`joint_fit`
+     raised `ValueError`; on SUNRISE 2021 no descent's pairs span more than
+     28.3 dbar), stopping the run before a `fit.prior` was consulted. The term
+     is now skipped with a note in the report and `geometry_skipped` in the
+     record.
+  4. *One NaN count turned the rest of the file to NaN* through the single
+     pole. The pole now restarts after a gap, blanking five time constants
+     while it settles, and every pair whose kernel the gap or the blank
+     touches is dropped; the pairs lost are counted (`thermistor_gap`, the
+     record's `thermistor_gaps`). Finite input gives the same pairs bit for
+     bit as before.
+  5. *The reference-free T1 − T2 check used each file's embedded
+     coefficients*, which per-file patches had left several K apart at fixed
+     L (ARCTERX-2022 Interior: 13 sets in 30 files). Both channels now take
+     their coefficients from one source, named in the report line: this run's
+     fit when it fitted both, else the embedded sets when each is one set
+     across the files, else the check is unavailable with the reason (never a
+     fitted T1 against an embedded T2). On ARCTERX-2022 Interior the file-to-file steps in T1 − T2 fall
+     from up to 2.5 K to 2.5 mK and its slope from +0.32 to +1.3×10⁻⁴ K/day;
+     on osu685 2025 and osu684 2023, whose two beads carry identical nominal
+     coefficients, the slope is 5× and 6.5× smaller (the old check read the
+     change in water temperature as differential drift). This changes the
+     T1 − T2 line of every two-channel report and the stability panel of the
+     figure.
+  6. *The ±40 s clock search ran against the instrument's own reference*,
+     where the offset is zero by construction. `reference.same_clock: auto`
+     (new; `true`/`false` force it) skips it when the reference's samples are
+     the instrument's own in time (1 µs) and pressure (1 mm). On SUNRISE 2022
+     PointSur (77 files) the search took 232 s of 894 s; the run now takes
+     666 s, with identical coefficients (it had returned −1.3 µs). The clock
+     offset is recorded as 0 with `clock_source`, which says when the zero
+     was asserted (`true`) rather than detected: an asserted zero measured
+     nothing and is not a value for perturb's `hotel.time_offset`.
+
+  `profiles.direction` (new, default `glide`) selects a VMP's descents. The
+  runbook has a VMP section (§8).
 - **`fp07-cal fit` reported gradient changes as bead drift in its streaming
   pass.** The per-profile statistics that give a deployment's drift compared
   each profile with the raw CTD temperature, although the calibration was

@@ -19,11 +19,12 @@ from pathlib import Path
 import numpy as np
 
 from odas_tpw._version_info import add_version_argument, software_version
-from odas_tpw.fp07cal.fit import fit_calibration, select_order
-from odas_tpw.fp07cal.lag import pressure_offset, temperature_lag
-from odas_tpw.fp07cal.pairs import PairConfig, build_pairs_multi
+from odas_tpw.fp07cal.fit import fit_calibration, outlier_screen, select_order
+from odas_tpw.fp07cal.lag import LagResult, pressure_offset, shares_clock, temperature_lag
+from odas_tpw.fp07cal.pairs import SETTLE_TAUS, PairConfig, build_pairs_multi
 from odas_tpw.fp07cal.prior import (
     PriorError,
+    is_ntc,
     load_sheet,
     no_prior_record,
     parse_prior_config,
@@ -75,6 +76,16 @@ reference:
                        # straight at a raw converted ebd.nc, which has not.
   valid_min: -5.0
   valid_max: 45.0
+  same_clock: auto     # Is the reference on the instrument's OWN clock (a VMP
+                       # against its own JAC CT)? Then the clock offset is 0 by
+                       # construction and the +/-40 s pressure search is
+                       # skipped. auto: yes when the reference's samples are
+                       # the instrument's own (time stamps to 1 us, pressure to
+                       # 1 mm); true/false force it. Affects only the reported
+                       # clock/thermal split of the lag, never the coefficients.
+                       # With true the 0 is an assertion, not a measurement
+                       # (the record's clock_source says so): never copy it
+                       # into perturb's hotel.time_offset.
 
 pairs:
   max_gap: 30.0        # [s] largest CTD spacing still counted as coverage.
@@ -109,6 +120,9 @@ profiles:
                        # VMP-tuned 0.3 rejects every glide
   P_min: 0.5           # [dbar] minimum pressure for a profile sample
   min_duration: 60.0   # [s] shortest stretch counted as a profile
+  direction: glide     # glide: both legs of a yo (a glider); down: a VMP's
+                       # descents (its hauled-in ascent puts the sensors in
+                       # the body's wake)
 
 lag:
   max_lag: 20.0
@@ -282,15 +296,27 @@ def _load_reference(cfg: dict):
     )
 
 
+_DIRECTIONS = ("glide", "down", "up")
+
+
 def _profile_kwargs(cfg: dict) -> dict:
     """The `profiles:` block -> load_probe_series keyword arguments (P7)."""
     prof = cfg.get("profiles", {}) or {}
-    return {
+    kw = {
         "speed_var": prof.get("speed_var", "U_EM"),
         "W_min": float(prof.get("W_min", 0.05)),
         "P_min": float(prof.get("P_min", 0.5)),
         "min_duration": float(prof.get("min_duration", 60.0)),
     }
+    # Only when set, so a glider config reaches load_probe_series unchanged.
+    if "direction" in prof:
+        d = str(prof["direction"]).strip().lower()
+        if d not in _DIRECTIONS:
+            raise ValueError(
+                f"profiles.direction: {prof['direction']!r} must be one of {list(_DIRECTIONS)}"
+            )
+        kw["direction"] = d
+    return kw
 
 
 def _load_some(paths, limit: int, prof_kw: dict | None = None):
@@ -359,6 +385,99 @@ def _pair_config(cfg: dict) -> PairConfig:
     )
 
 
+def _same_clock_setting(cfg: dict) -> str:
+    """``reference.same_clock`` -> ``"auto"``, ``"yes"`` or ``"no"``; anything else refused."""
+    value = (cfg.get("reference") or {}).get("same_clock", "auto")
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    raise ValueError(f"reference.same_clock: {value!r} must be auto, true or false")
+
+
+def _clock_offset(probes, ref, cfg: dict) -> LagResult:
+    """The instrument-vs-reference clock offset: searched, or zero by construction.
+
+    ``reference.same_clock`` (default ``auto``): when the reference is on the
+    instrument's own clock --- a VMP fitted against its own JAC CT --- the
+    offset is zero by construction and the +/-40 s pressure search only spends
+    time confirming it: 232 s of an 894 s run on SUNRISE 2022 PointSur (77
+    files), to return -1.3 us.  ``auto`` decides by :func:`shares_clock`; ``true``
+    asserts it (and, if wrong, misstates only the clock/thermal split of the
+    lag, never the calibration, which the temperature lag search handles
+    whole); ``false`` always searches.
+
+    The record's ``clock_source`` says which: an asserted zero was never
+    measured, so it must not be copied into perturb's ``hotel.time_offset``
+    the way a measured ``clock_offset_s`` is.
+    """
+    setting = _same_clock_setting(cfg)
+    if setting == "yes":
+        label = ("clock offset 0 ASSERTED by reference.same_clock: true, not measured: do "
+                 "not copy clock_offset_s into perturb's hotel.time_offset")
+    elif setting == "auto" and shares_clock(probes, ref):
+        label = ("clock offset 0 by construction, not searched (detected: the reference's "
+                 "samples are the instrument's own, in time and pressure)")
+    else:
+        return pressure_offset(probes, ref)
+    return LagResult(lag=0.0, exact=True, label=label)
+
+
+def _gap_summary(pairs) -> dict:
+    """What the thermistor gaps cost, for the record."""
+    g = pairs.gaps
+    return {
+        "n_files": len(g),
+        "n_gaps": int(sum(v.get("n_gaps", 0) for v in g.values())),
+        "n_nonfinite_samples": int(sum(v.get("n_nonfinite", 0) for v in g.values())),
+        "n_settling_samples": int(sum(v.get("n_settling", 0) for v in g.values())),
+        "n_pairs_lost": int(pairs.rejected.get("thermistor_gap", 0)),
+        "files": sorted(g)[:20],
+    }
+
+
+def _gap_note(s: dict) -> str:
+    return (
+        f"{s['n_nonfinite_samples']} non-finite thermistor sample(s) in {s['n_gaps']} "
+        f"gap(s) across {s['n_files']} file(s). The single pole that slows the "
+        f"thermistor to the reference restarted after each gap, with the first "
+        f"{SETTLE_TAUS:g} time constants ({s['n_settling_samples']} samples) blanked "
+        f"while it settled; {s['n_pairs_lost']} pair(s) were lost to them "
+        f"(`thermistor_gap`)."
+    )
+
+
+def _outliers_beyond_gate(pairs, pred_err: np.ndarray, outlier: np.ndarray) -> dict | None:
+    """The pairs the robust fit rejected that the export gate would have refused on."""
+    big = outlier & np.isfinite(pred_err) & (pred_err > MAX_PREDICTION_ERROR_K)
+    if not big.any():
+        return None
+    k = int(np.flatnonzero(big)[np.argmax(pred_err[big])])
+    return {
+        "n": int(big.sum()),
+        "n_rejected": int(outlier.sum()),
+        "max_error_K": float(pred_err[k]),
+        "worst_time": float(pairs.time[k]),
+        "worst_pressure_dbar": float(pairs.pressure[k]),
+        "worst_file": str(pairs.file_label[k]),
+    }
+
+
+def _outlier_warning(b: dict) -> str:
+    from datetime import UTC, datetime
+
+    when = datetime.fromtimestamp(b["worst_time"], tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"{b['n']} of the {b['n_rejected']} pairs the robust fit rejected mispredict the "
+        f"reference by more than {MAX_PREDICTION_ERROR_K:g} K, worst {b['max_error_K']:.3g} K "
+        f"at {when}, {b['worst_pressure_dbar']:.1f} dbar ({b['worst_file']}). They are "
+        f"left out of the fit and of the export gate; check the reference there (a spike or "
+        f"an instrument-wide transient)"
+    )
+
+
 def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool = True) -> dict:
     """Lag -> pairs -> fit -> stability -> report, for each requested channel.
 
@@ -400,18 +519,21 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             (provenance["time_start"], provenance["time_end"]) if probes else None
         )
         priors = resolve_priors(pcfg, probes, list(channels), span=span)
-    po = pressure_offset(probes, ref)
+    po = _clock_offset(probes, ref, cfg)
     clock = (po.lag, po.score)
     print(f"  {po.summary()}")
-    t1t2 = t1_t2_series(probes)
     results: dict = {
         "schema": "fp07-cal/1",
         "software_version": software_version(),
         "clock_offset_s": clock[0],
         "clock_offset_r": clock[1],
+        **({"clock_source": po.label} if po.exact else {}),
         **provenance,
         "channels": {},
     }
+    # Reports are written once every channel is fitted: the T1 - T2 check
+    # needs both channels' coefficients (issue #238).
+    reported: dict[str, dict] = {}
 
     for ch in channels:
         if not any(ch in p.counts for p in probes):
@@ -430,12 +552,51 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             results["channels"][ch] = {"error": "zero pairs", "rejected": dict(pairs.rejected)}
             continue
 
+        notes: list[str] = []
+        extra: dict = {}
+        if pairs.gaps:
+            extra["thermistor_gaps"] = _gap_summary(pairs)
+            notes.append(_gap_note(extra["thermistor_gaps"]))
+            print(f"  {ch}: NOTE {notes[-1]}")
+        # The geometry term needs a reference gradient, which needs profiles
+        # spanning ~30 dbar. Without one, fit without the term and say so: a
+        # crash here stopped the run before the prior was ever consulted.
+        geometry = bool(fit_cfg.get("geometry", True))
+        dTdz = None
+        if geometry:
+            from odas_tpw.fp07cal.geometry import geometry_unavailable, local_dTdz
+
+            # Computed once, and handed to the joint fit below, which would
+            # otherwise compute the identical array again.
+            dTdz = local_dTdz(pairs)
+            why_not = geometry_unavailable(pairs, dTdz)
+            if why_not:
+                geometry = False
+                extra["geometry_skipped"] = why_not
+                notes.append(
+                    f"The sensor-geometry term was requested (fit.geometry) but skipped: "
+                    f"{why_not}. The calibration is fitted without it, as with "
+                    f"fit.geometry: false, so any dz * dT/dz is left in the residual."
+                )
+                print(f"  {ch}: NOTE geometry term skipped: {why_not}")
+
         order_cfg = fit_cfg.get("order", "auto")
         order_scores: dict = {}
+        # Held-out folds leave out the pairs every candidate order rejects (a
+        # reference glitch), or a 2 degC spike in 13-21 degC water sets the
+        # warm/cold split and dominates the test error (issue #238 review).
+        screen = None
+        uses_folds = order_cfg in (None, "auto") or (
+            pcfg is not None and ch in priors and priors[ch].prior is not None)
+        if uses_folds and bool(fit_cfg.get("robust", True)):
+            screen = outlier_screen(pairs, use_geometry=geometry, robust=True)
+            if screen.any():
+                print(f"  {ch}: {int(screen.sum())} pair(s) every order rejects are left out "
+                      f"of the held-out folds")
         if order_cfg in (None, "auto"):
             order, order_scores = select_order(
-                pairs, use_geometry=bool(fit_cfg.get("geometry", True)),
-                robust=bool(fit_cfg.get("robust", True)),
+                pairs, use_geometry=geometry,
+                robust=bool(fit_cfg.get("robust", True)), exclude=screen,
             )
             print(f"  {ch} order: {order} chosen by held-out error — " + ", ".join(
                 f"order {o}: {v['held_out_K']*1e3:.1f} mK held-out "
@@ -446,11 +607,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             order = int(order_cfg)
 
         geo = None
-        if fit_cfg.get("geometry", True):
+        if geometry:
             from odas_tpw.fp07cal.geometry import joint_fit
 
             fit, geo = joint_fit(
-                pairs, order=order, robust=bool(fit_cfg.get("robust", True)),
+                pairs, order=order, robust=bool(fit_cfg.get("robust", True)), dTdz=dTdz,
             )
             print(f"  {ch} geometry: {geo.summary()}")
             if np.isfinite(geo.collinearity) and geo.collinearity > 0.8:
@@ -485,7 +646,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                     full_fit=fit, full_geo=geo,
                     orders=(1, 2, 3) if order_cfg in (None, "auto") else (order,),
                     robust=bool(fit_cfg.get("robust", True)),
-                    geometry=bool(fit_cfg.get("geometry", True)),
+                    geometry=geometry, exclude=screen,
                 )
                 if chosen is None:
                     # mode offset and the offset-only fit failed: a channel-level
@@ -507,12 +668,25 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         # cross: a geometry column aliased with the intercept returned dz = 3448
         # +/- 0.68 m and a 6.5e33 K calibration error with nothing rejecting it
         # (issue #180 F20).
+        #
+        # Judged over every pair EXCEPT those the robust loop already rejected
+        # as outliers (issue #238). Counting them refused SUNRISE 2022
+        # PointSur, whose fit rms is 6-7 mK, over one 4.2 K reference event the
+        # fit had already thrown out. An unidentified fit mispredicts the pairs
+        # it kept too, so the F20 case is still refused; the outliers are
+        # reported on their own instead.
         max_pred_err = float("nan")
+        beyond = None
         if pairs.L.size and fit.coeffs.size:
             with np.errstate(over="ignore", invalid="ignore"):
                 pred_err = np.abs(fit.apply(pairs.L) - pairs.T_ref)
-            finite_err = pred_err[np.isfinite(pred_err)]
-            max_pred_err = float(finite_err.max()) if finite_err.size else float("inf")
+            outlier = (
+                fit.outlier if fit.outlier.size == len(pairs)
+                else np.zeros(len(pairs), dtype=bool)
+            )
+            judged = np.isfinite(pred_err) & ~outlier
+            max_pred_err = float(pred_err[judged].max()) if judged.any() else float("inf")
+            beyond = _outliers_beyond_gate(pairs, pred_err, outlier)
         if not np.isfinite(max_pred_err) or max_pred_err > MAX_PREDICTION_ERROR_K:
             print(
                 f"  {ch}: REFUSED — the fit mispredicts its own reference by up "
@@ -533,6 +707,37 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             if prior_rec is not None:
                 results["channels"][ch]["prior"] = prior_rec
             continue
+        # A thermistor is NTC: T falls as L rises. A fit that does not, over its
+        # own fitted range, is a fit to noise (water with no temperature range)
+        # and predicts its pairs within the 1 K gate all the same: without a
+        # prior, an isothermal synthetic exported beta_1 = -1.06e5 (issue #238).
+        if not is_ntc(fit):
+            lo, hi = fit.L_range
+            why = (
+                f"T does not fall as L rises over the fitted L range {lo:.5f}..{hi:.5f} "
+                f"(dT/dL >= 0 somewhere, or 1/T_K <= 0), so this is not an FP07 curve: "
+                f"typically water with too little temperature range, where a fit to "
+                f"noise can take either sign"
+            )
+            print(f"  {ch}: REFUSED — {why}. No coefficients are exported for this "
+                  f"channel; a fit.prior block lends such a deployment the bead's shape.",
+                  file=sys.stderr)
+            results["channels"][ch] = {
+                "error": "not an FP07 curve",
+                "reason": why,
+                "order": fit.order,
+                "refused_coefficients": fit.coeffs.tolist(),
+                "L_range": list(fit.L_range),
+                "T_range": list(fit.T_range),
+            }
+            if prior_rec is not None:
+                results["channels"][ch]["prior"] = prior_rec
+            continue
+        warnings: list[str] = []
+        if beyond is not None:
+            extra["outliers_beyond_gate"] = beyond
+            warnings.append(_outlier_warning(beyond))
+            print(f"  {ch}: WARNING {_outlier_warning(beyond)}", file=sys.stderr)
 
         blocks = blocked_offsets(
             pairs, fit,
@@ -543,12 +748,8 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         )
         stab = drift_fit(blocks)
         stab.channel = ch
-
-        md = fit_text(pairs, fit, clock_offset=clock, stab=stab, t1t2=t1t2,
-                      min_corr=pc.min_corr, prior=prior_rec)
-        (out_dir / f"{ch}_report.md").write_text(md, encoding="utf-8")
-        if make_figure:
-            figure(pairs, fit, stab=stab, t1t2=t1t2, path=out_dir / f"{ch}_diagnostics.png")
+        reported[ch] = {"pairs": pairs, "fit": fit, "stab": stab, "prior": prior_rec,
+                        "notes": notes, "warnings": warnings}
 
         results["channels"][ch] = {
             "lag_s": lag,
@@ -620,6 +821,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "reason": stab.reason,
             },
         }
+        # Present only when they apply, so a record none of them touch is
+        # unchanged byte for byte.
+        if lr.narrow_window():
+            results["channels"][ch]["lag_resolution"] = lr.resolution()
+        results["channels"][ch].update(extra)
         if prior_rec is not None:
             results["channels"][ch]["prior"] = prior_rec
         print(f"  {ch}: {stab.summary()}")
@@ -629,6 +835,22 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             f"lag={lag:+.2f}s r={r:.4f} rms={fit.rms_K:.4f}K "
             f"split={fit.dive_climb_split_K:+.4f}K"
         )
+
+    # The reference-free T1 - T2 check, with ONE coefficient set per channel:
+    # this run's fit where there is one. Each file's embedded set used to be
+    # taken instead, and where files had been patched one by one those differ
+    # by several K at fixed L (ARCTERX-2022 Interior: 13 sets in 30 files,
+    # 6.3 K apart for T1; issue #238).
+    t1t2 = t1_t2_series(probes, coeffs={ch: d["fit"].coeffs for ch, d in reported.items()})
+    for ch, d in reported.items():
+        md = fit_text(d["pairs"], d["fit"], clock_offset=clock,
+                      clock_note=po.label if po.exact else None, stab=d["stab"],
+                      t1t2=t1t2, min_corr=pc.min_corr, prior=d["prior"],
+                      notes=d["notes"], extra_warnings=d["warnings"])
+        (out_dir / f"{ch}_report.md").write_text(md, encoding="utf-8")
+        if make_figure:
+            figure(d["pairs"], d["fit"], stab=d["stab"], t1t2=t1t2,
+                   path=out_dir / f"{ch}_diagnostics.png")
 
     (out_dir / "coefficients.json").write_text(
         json.dumps(results, indent=2, default=float), encoding="utf-8"
@@ -697,11 +919,12 @@ def _cmd_coverage(args) -> int:
     paths = _gather_paths(cfg)
     try:
         ref = _load_reference(cfg)
+        prof_kw = _profile_kwargs(cfg)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     limit = int(cfg.get("files", {}).get("max_fit_files", 100) or 100)
-    probes, skipped = _load_some(paths, limit, _profile_kwargs(cfg))
+    probes, skipped = _load_some(paths, limit, prof_kw)
     print(f"{len(paths)} .p file(s); sampled {len(probes)} with profiles "
           f"({skipped} skipped)")
     pc = _pair_config(cfg)
@@ -733,7 +956,9 @@ def _cmd_fit(args) -> int:
         pcfg = parse_prior_config(cfg.get("fit"), cfg.get("channels"))
         if pcfg is not None:
             load_sheet(pcfg)
-    except PriorError as exc:
+        _same_clock_setting(cfg)
+        _profile_kwargs(cfg)
+    except ValueError as exc:  # PriorError is a ValueError
         print(f"refusing: {exc}", file=sys.stderr)
         return 1
     paths = _gather_paths(cfg)
@@ -858,18 +1083,25 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
                     hi = hi + a * ps.L**j
             a0 = y - hi
             resid = T_cal - temperature(ps.L, coeffs)
+            # The temperature a profile covers, for the patch-time validity
+            # verdict, leaves out reference glitches as the fit's own range
+            # does: a pair the calibration mispredicts by more than the export
+            # gate is not water the coefficients were asked to describe.
+            with np.errstate(invalid="ignore"):
+                cover = np.abs(resid) <= MAX_PREDICTION_ERROR_K
             uid = np.asarray(ps.profile_uid, dtype=object)
             for u in np.unique(uid):
                 sel = uid == u
                 good = np.isfinite(resid[sel])
                 if good.sum() < 100:
                     continue
+                Tc = ps.T_ref[sel & cover] if np.any(sel & cover) else ps.T_ref[sel]
                 recs[ch].append((float(np.mean(ps.time[sel])),
                                  float(np.mean(a0[sel][good])),
                                  float(np.mean(resid[sel][good])),
                                  float(np.median(ps.T_ref[sel])),
-                                 float(np.min(ps.T_ref[sel])),
-                                 float(np.max(ps.T_ref[sel]))))
+                                 float(np.min(Tc)),
+                                 float(np.max(Tc))))
 
     if failures:
         by_reason: dict[str, int] = {}
