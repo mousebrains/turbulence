@@ -394,7 +394,15 @@ fits are equally good (pole form undetermined) and give 3-dB points ~30-40% lowe
 > absolute level does not, by up to 1.3x. That is the estimator dependence of the
 > absolute level, not a change in the beads. The "Robust estimator" section's
 > 16.3/23.5 (1-25 Hz) could not be reproduced exactly (17.4/25.6 here; its
-> cache no longer exists).
+> cache no longer exists). Two later changes to `fp07-pair tau` (2026-10-28,
+> after an independent review): the ratios' reference level is the curve at
+> 2-4 Hz, and a probe whose 60-100 Hz floor exceeds 1.25x its noise model
+> identifies no tau. The second TIGHTENS the rule after real results were seen
+> (SUNRISE 2022 PointSur); its threshold was set on synthetics. Neither moves
+> this pair's taus (floors 1.02/1.05); its 20 Hz power ratio now reads 0.57
+> relative to 2-4 Hz, against 0.50 relative to the lowest bins (~1 Hz), because
+> 2-4 Hz is already inside the slower bead's roll-off (docs/fp07pair/runbook.md
+> section 6).
 
 - The four ARCTERX-22 beads read 9-20 ms at ~1 m/s: SLOWER than lueck
   (10 ms), and ~2x slower than the published FP07 values.

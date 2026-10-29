@@ -235,6 +235,9 @@ decides whether a pair identifies a tau at all are in
 | `halves.first`, `halves.second` | `halves[0]`, `halves[1]`, the same fields, plus `power_ratio_20Hz` from the half's `ln_ratio` (turned round as below); null when every file shares one start time |
 | `power_ratio`, `power_ratio_16_84` | `exp(all.ln_ratio)` at 10 and 20 Hz, turned round for the bead on the first channel, so it is always this bead's power response over its partner's |
 | `flags` | the record's `amplitude`, `dead-bead`, `outlier`, `noise-model` and `ratio-shift`, and `drift` when this bead's `drift` is set |
+| `rule` | `rule_thresholds`: the thresholds the measurement used (`n_boot` included); the loader refuses an identified block that breaks them, and the sheet names any that differ from the package default |
+| `reference_band_Hz` | `[min, max]` of `reference_points_Hz`, where the ratios' reference level was read (2-4 Hz) |
+| `noise_floor` | `all.noise_obs_over_model`, this bead's and its partner's (4 significant figures) |
 | `notes` | `--notes` |
 
 Tau at 1 m/s is derived from `tau_ms`, `W_ref_m_s` and `speed_scaling` when

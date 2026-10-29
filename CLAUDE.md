@@ -285,11 +285,14 @@ Facts that are easy to get wrong:
   the robust part. Matched beads give NO tau (rule set on synthetics: >= 16 chi
   files from >= 5 recordings, |ln R'(20 Hz)| >= max(3 bootstrap sigma, 0.15),
   each 16-84% interval within x1.5), nor does a pair with a DEAD bead (spectrum
-  identically zero through a file; SUNRISE 2021 Pelican T1593). The bootstrap
-  resamples recordings (.p files), never profiles: profiles of one .p are not
-  independent. `fp07-cal registry response` records it; nothing in chi
-  reads it yet (a per-bead tau would be a third route beside `fp07_tau_scale`
-  and `fp07_response`, which are mutually exclusive).
+  identically zero through a file; SUNRISE 2021 Pelican T1593), nor one whose
+  60-100 Hz quiet-window floor exceeds 1.25x a probe's noise model (unmodelled
+  content on ONE probe biases BOTH taus; SUNRISE 2022 PointSur T2). The
+  bootstrap resamples recordings (.p files), never profiles: profiles of one .p
+  are not independent. Records and sheet blocks carry the thresholds used.
+  `fp07-cal registry response` records it; nothing in chi reads it yet (a
+  per-bead tau would be a third route beside `fp07_tau_scale` and
+  `fp07_response`, which are mutually exclusive).
 
 ### Python API
 

@@ -223,8 +223,14 @@ Per bead pair, from the chi products' raw `spec_gradT` and `spec_noise`:
    recording are not independent draws, so resampling them one by one would
    make the intervals too narrow;
 4. the model-free power ratio at 10 and 20 Hz, relative to the reference
-   level (the lowest four usable bins below 4 Hz, the `ln G` that `fp07-pair
-   fit` reports), with its bootstrap interval;
+   level, with its bootstrap interval. The reference is the pooled curve's
+   mean at 2, 3 and 4 Hz, read like the fit points, so it does not follow the
+   FFT resolution (`fp07-pair fit`'s `ln G` takes the lowest four usable bins,
+   ~1 Hz on 1 Hz FFTs and ~2 Hz on 2 Hz ones, about 0.03 in ln R'(20 Hz) for a
+   15/22 ms pair). 2-4 Hz is the lowest band both resolutions share; for a
+   slow bead it is already inside the roll-off, so these ratios are smaller in
+   magnitude than ratios to ~1 Hz (ARCTERX-2022 SN194: S2/S1 at 20 Hz 0.57
+   against 0.50). It is recorded as `reference_band_Hz`;
 5. the same for the first and second halves of the files in time, split
    between different start times and fitted at the same `W_ref`. A bead whose
    halves differ by more than twice their combined 1-sigma in ln tau is
@@ -235,9 +241,17 @@ Per bead pair, from the chi products' raw `spec_gradT` and `spec_noise`:
 6. dead beads: a chi file in which a bead's spectrum is identically zero over
    1-10 Hz in at least half its windows (a dead or railed channel) is left
    out and listed, and the pair flagged `dead-bead`;
-7. a noise-model check (a diagnostic): each probe's observed/model spectrum
-   at 60-100 Hz in the quietest 10% of the windows it can use (S/N >= 10 over
-   1-10 Hz), flagged outside 0.67-1.5.
+7. a noise-model check: each probe's observed/model spectrum at 60-100 Hz
+   (above the fit band, below the anti-alias corner) in the quietest 10% of
+   the windows it can use (S/N >= 10 over 1-10 Hz), per stretch (all, each
+   half). Above 1.25x on either probe the stretch identifies no tau (rule 7);
+   below 0.67x (a noise model too high) it is only flagged `noise-model`.
+
+The record carries the thresholds it was measured with (`rule_thresholds`,
+`n_boot` included; the `rule` text is written from them, and
+`rule_is_default` says whether any was overridden on the command line), and
+so does the sheet's block (`rule`). A chi file that cannot be read, or lacks
+`spec_noise`, is skipped and listed in the report, never the end of the run.
 
 Each pair writes `fp07tau_<instrument>_<beads>_<start>.json` (the record) and
 a `.txt` report.
@@ -274,15 +288,18 @@ the validation table. A pair's taus are identified only when:
    with a 1.05x margin), and each interval spans at most a factor 1.5;
 5. at least 90% of the bootstrap replicates fit;
 6. neither bead is dead in any chi file of the span (a half is refused only
-   when a dead file falls in its time).
+   when a dead file falls in its time);
+7. neither probe's observed floor at 60-100 Hz, in its quietest usable
+   windows, exceeds its noise model by more than 1.25x (each stretch on its
+   own floor).
 
 Otherwise the record's tau is null and the reasons are listed; the ratios
 are still recorded. A half is judged by the same rule, so a short deployment
 can have a tau overall and none per half. To measure a bead before it died,
 give a span that ends before the dead files; the refusal is deliberate, since
 a bead's response usually degrades before it dies (on SUNRISE 2021 Pelican
-the T1592/T1593 ratio at 20 Hz went from matched to 0.71 in the days before
-T1593's channel went dead). `drift` is flagged when a bead's
+the T1592/T1593 ratio at 20 Hz went from matched to 0.72 in the days before
+T1593's channel sat on the ADC rail). `drift` is flagged when a bead's
 halves differ by more than twice their combined 1-sigma (in ln tau).
 
 **Synthetic validation** (`scripts/fp07_tau/bead_tau_synth.py`): synthetic chi
@@ -295,20 +312,23 @@ windows, VMP speed 0.95 m/s, unless stated:
 | case | truth tau1/tau2 [ms] | recovered [16-84%] | verdict |
 |---|---|---|---|
 | matched beads | 10/10 | 0.5/0.6, intervals to the bounds | **not identified** (beads not distinguishable) |
-| near-matched | 11/10 | 11.1 [8.7-14.7] / 10.1 [7.8-13.5] | **not identified** (intervals x1.7) |
-| | 12/10 | 12.0 [11.0-13.7] / 10.0 [9.2-11.5] | identified |
-| ARCTERX-22 SN194-like | 13/19.5 | 13.1 [12.8-13.9] / 19.5 [19.0-20.6] | identified |
-| | 25/10 | 25.1 [24.6-25.5] / 10.2 [9.9-10.3] | identified, `outlier` |
-| glider, W 0.3 m/s | 20/15 | 21.0 [19.6-22.2] / 16.0 [14.9-16.9] | identified |
-| noise 1.5x model on one probe, peak S/N 60 | 13/19.5 | 13.4 [12.8-14.2] / 19.6 [18.8-20.7] | identified |
-| noise 0.67x model on one probe, peak S/N 60 | 13/19.5 | 13.8 [13.0-14.5] / 20.3 [19.3-21.3] | identified, `noise-model` |
-| peak S/N 20 | 13/19.5 | 12.5 [10.9-13.6] / 18.4 [16.5-19.9] | identified |
-| 2 Hz FFT bins (SUNRISE), 15 windows/file | 13/19.5 | 13.5 [11.5-15.1] / 20.1 [17.2-22.5] | identified |
+| near-matched | 11/10 | 11.1 [8.9-13.7] / 10.1 [8.1-12.6] | **not identified** (\|ln R'(20 Hz)\| 0.125 < 0.15) |
+| | 12/10 | 12.0 [11.1-13.6] / 10.0 [9.3-11.5] | identified |
+| ARCTERX-22 SN194-like | 13/19.5 | 13.1 [12.9-13.7] / 19.5 [19.2-20.3] | identified |
+| | 15/10 | 15.1 [14.5-15.8] / 10.2 [9.7-10.7] | identified |
+| | 25/10 | 25.1 [24.6-25.5] / 10.2 [10.0-10.4] | identified, `outlier` |
+| glider, W 0.3 m/s | 20/15 | 21.0 [19.6-22.0] / 16.0 [14.9-16.7] | identified |
+| glider, W 0.3 m/s | 30/12 | 30.5 [29.9-30.9] / 12.3 [12.1-12.6] | identified, `outlier` |
+| true noise 1.5x the model on one probe, peak S/N 300 / 60 | 13/19.5 | 13.4 [13.0-14.0] / 19.7 [19.2-20.5]; 13.4 [12.9-14.4] / 19.6 [18.9-20.9] | **not identified** (floor 1.42x > 1.25, rule 7) |
+| true noise 0.67x the model on one probe, peak S/N 60 | 13/19.5 | 13.8 [12.9-14.7] / 20.3 [19.2-21.4] | identified, `noise-model` |
+| peak S/N 20 | 13/19.5 | 12.5 [11.0-13.5] / 18.4 [16.5-19.9] | identified |
+| recordings that differ (own speed offset and noise-model error, sd 0.3) | 13/19.5 | 14.1 [13.6-14.5] / 21.0 [20.5-21.8] | identified (this seed 8% high; over 20 seeds the median is 13.3/19.7, coverage 0.60/0.75) |
+| 2 Hz FFT bins (SUNRISE), 15 windows/file | 13/19.5 | 13.5 [11.2-14.9] / 20.1 [16.7-22.3] | identified |
 | 8 files | 13/19.5 | 15.9 [13.7-17.9] / 23.2 [20.0-25.9] | **not identified** (8 files < 16) |
-| 16 files | 13/19.5 | 14.4 [12.9-16.1] / 21.0 [18.9-23.2] | identified |
+| 16 files | 13/19.5 | 14.4 [12.8-16.2] / 21.0 [18.5-23.5] | identified |
 | failing bead (gain 0.3) | 13/19.5 | 12.9 / 19.4 | **not identified**, `amplitude` |
-| drift between halves | 10.8/17.7 → 16.1/22.0 | halves 10.7/17.3 → 16.7/22.8 | identified, `drift` |
-| double-pole truth, single pole fitted | DP 8/5 | 9.4 [9.1-9.7] / 3.2 [2.8-3.5] | identified: single-pole *equivalent*, not the double pole |
+| drift between halves | 10.8/17.7 → 16.1/22.0 | halves 10.7/17.3 → 16.7/22.8 | identified, `drift`, `ratio-shift` |
+| double-pole truth, single pole fitted | DP 8/5 | 9.4 [9.1-9.6] / 3.2 [2.9-3.4] | identified: single-pole *equivalent*, not the double pole |
 
 Over 20 seeds per case (100 bootstrap replicates; the bootstrap resampling
 whole recordings, the files sharing a start time):
@@ -331,9 +351,10 @@ limitations are real. With few recordings (5-12) the interval under-covers
 0.3 m/s the taus read 6-7% high and the interval covers the truth about
 half the time; with 2 Hz FFT bins they read ~5% high. All three are well
 inside the bead-to-bead spread the sheet exists to record, and smaller than
-the estimator and band dependence of the absolute level (below). A noise model
-1.5x off on one probe moves tau by less than its interval, because the S/N >=
-10 gate keeps such bins out (`noise-model` flags it all the same).
+the estimator and band dependence of the absolute level (below). A true noise
+floor 1.5x the model on one probe moved tau by less than its interval here,
+because the S/N >= 10 gate keeps such bins out; rule 7 refuses it all the same,
+because content of other shapes at a similar floor does bias tau (below).
 
 On synthetics the recording bootstrap is no better than resampling profiles:
 the generator's recordings are nearly independent of each other even when
@@ -361,6 +382,54 @@ is never read across a hole in the band; the noise check ignores dead windows,
 which had read as a noise model 30x too high. These are data-quality and
 statistical corrections, not thresholds tuned to a tau.
 
+Rule 7 is different, and it is a TIGHTENING made after the real results were
+seen: SUNRISE 2022 PointSur came out identified with T2005 at 4.9 ms (22-25 ms
+in 2021 and March 2022) and T2's quiet-window floor 1.52x its model at 60-100
+Hz and 23x at 150-250 Hz, and an independent review then showed on synthetics
+that unmodelled content on ONE probe biases BOTH taus while the pair stays
+identified. The threshold was then set on synthetics alone
+(`scripts/fp07_tau/bead_tau_contam.py`; truth 13/19.5 ms, 16 recordings; z is
+each tau's bias in units of its own 16-84% half-width, median of 3 seeds):
+
+| on probe 2 | 60-100 Hz floor (obs/model) | z, T1 / T2 | rule 7 |
+|---|---|---|---|
+| nothing | 0.94 | +0.2 / -0.1 | identified |
+| white, +0.25 x the model | 1.19 | +0.5 / +0.1 | identified |
+| white, +0.5 | 1.44 | +0.8 / +0.3 | refused |
+| white, +1 | 1.94 | +2.3 / +1.5 | refused |
+| rising as f^2 above 10 Hz (0.3 / 1 / 3) | 1.56 / 2.99 / 6.91 | <= +0.6 | refused |
+| a peak at 30 Hz, inside the fit band (x1 / x3) | 0.98 / 1.05 | +2.2 / +6.1 (T1) | **not caught** |
+| a peak at 30 Hz (x10) | 1.27 | +17 / +12 (tau 32/41 ms) | refused |
+| noise MODEL 2x / 5x too high on both probes | 0.48 / 0.20 | <= +0.7 | identified, flagged |
+
+On the tests' generator (`tests/test_fp07_bead_tau.py`) the same white
+content bit harder (floor 1.23x: z +1.5/+1.0; 1.48x: +1.9/+1.2) and the 30 Hz
+peak at x10 read 1.29x (z +18/+15).
+
+White content that raises the 60-100 Hz floor to ~1.2-1.45x moves the taus
+by 0.5-1.9 half-widths on the two generators, and a peak inside the fit band
+shows there only faintly while biasing tau badly (caught from ~1.27x); healthy
+real deployments read 1.00-1.21; a noise model too HIGH (floor 0.2-0.5x, as on
+SUNRISE 2021) does not bias it. Hence a refusal above 1.25x and only a flag
+below 0.67x. **What it cannot catch:** content confined to the fit band, which
+barely reaches 60-100 Hz (the 30 Hz peak at amplitude 3 above). A second
+detector was tried and rejected: whether the ratio at 12-25 Hz differs between
+the lowest- and highest-energy third of the windows (additive content pulls
+the low-energy ones). Its null is not zero (+0.06 to +0.08 in ln on clean
+synthetics, from the S/N gate's selection), and the in-band peaks that bias
+tau moved it by no more than 0.03 above that null.
+
+Applied to the 19 populated sheet entries, rule 7 changes the verdict of
+exactly two: SUNRISE 2022 PointSur T1592 and T2005, identified before and not
+now (T2's floor 1.52x; 1.40x and 1.71x in the halves). It adds a reason to four
+entries already unidentified for too few recordings (ARCTERX-2022 Wake T1592
+and T2005, ARCTERX-2025 Interior T2007 and T1592: T1's floor 1.33x), and it
+also refuses the second half of T1593's SUNRISE 2021 Pelican pair (1.40x and
+1.32x), which was unidentified as a whole and in both halves already. No other
+tau, interval or half moved; every identified entry's floors lie at
+0.21-1.21x. The ratios all moved slightly, from the fixed 2-4 Hz reference
+(item 4 above), not from rule 7.
+
 ### Acceptance: ARCTERX-2022 Interior SN194 (T1592/T2005)
 
 `docs/fp07_tau_prefactor_PLAN.md` published, for this pair, single-pole taus
@@ -384,8 +453,8 @@ resampling recordings: 30 recordings here). Walking from one to the other one st
 at a time (point estimates): the shared S/N gate changes nothing; the reduced-
 frequency axis with the log grid's bins as filled reads 7-9% higher; read at
 fixed 1 Hz points it returns to within 4%. The tau ratio (1.47-1.50), the
-pair's power ratio (T1592 2.0x T2005 at 20 Hz relative to the reference band),
-and the slowing between halves (T1592 +37%, T2005 +22%; the first pass gave
+pair's power ratio (T1592 2.0x T2005 at 20 Hz relative to the lowest bins;
+1.77x relative to the 2-4 Hz reference the sheet now records), and the slowing between halves (T1592 +37%, T2005 +22%; the first pass gave
 +49%/+24%) agree across every estimator. The absolute level moves by up to
 1.3x with the estimator and by 1.5x with the band (fitted over 1-60 Hz:
 10.9/16.7 ms). The bootstrap intervals above are sampling intervals only; they

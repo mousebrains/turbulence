@@ -1117,7 +1117,9 @@ def _check_identified(w: str, rule: dict[str, float], n_files: int, n_rec: int,
                        f"{rule['noise_floor_max']:g}")
     if bad:
         raise PlausibilityError(f"{w}: identified, yet against its own rule: " + "; ".join(bad))
-_HALF_KEYS = ("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84", "power_ratio_20Hz")
+
+
+_HALF_KEYS =("first", "last", "n_chi_files", "tau_ms", "tau_ms_16_84", "power_ratio_20Hz")
 
 
 def _tau_pair(v: object, ci: object, w: str) -> tuple[float | None, tuple[float, float] | None]:
@@ -2146,9 +2148,9 @@ RESPONSE_SEMANTICS = (
     "(`docs/fp07_tau_prefactor_PLAN.md`). The electronics contribute negligibly: the "
     "anti-alias filters sit near 110 Hz, far above the band, so this is the bead's tau. "
     "**The ratio is the robust part**, recorded model-free as this bead's power response "
-    "over its partner's at 10 and 20 Hz, relative to the reference band (the lowest "
-    "well-sampled bins below 4 Hz). The time halves show a bead that changed within a "
-    "deployment."
+    "over its partner's at 10 and 20 Hz, relative to the reference band (the pooled "
+    "ratio's mean at 2, 3 and 4 Hz, `reference_band_Hz`). The time halves show a bead that "
+    "changed within a deployment."
 )
 
 
@@ -2168,8 +2170,12 @@ def _response_how_to_read() -> list[str]:
       "bead (one that loses amplitude, or goes dead) has no time constant to measure. A pair "
       "is identified only when the beads differ beyond bootstrap noise at 20 Hz, each tau's "
       "16-84% interval is bounded and spans at most a factor 1.5, the flat gain is below a "
-      "factor 2, neither bead is dead in any chi file of the span, and there are enough chi "
-      "files, recordings and frequency points (the full rule is in the runbook). The "
+      "factor 2, neither bead is dead in any chi file of the span, neither probe's observed "
+      "floor at 60-100 Hz is more than 1.25x its noise model (`noise_floor`: unmodelled "
+      "content on one probe biases both taus), and there are enough chi files, recordings and "
+      "frequency points (the full rule is in the runbook). Each block records the thresholds "
+      "it was measured with (`rule`), the loader refuses an identified block that breaks its "
+      "own, and a non-default threshold is named in the notes. The "
       "intervals come from resampling whole recordings (`.p` files), and they are sampling "
       "intervals only: the choice of estimator and band moves the level by more. Otherwise "
       "tau is blank and only the power ratios are recorded.")
@@ -2617,6 +2623,21 @@ def _flow(d: dict) -> str:
     return "{" + ", ".join(f"{k}: {_scalar(v)}" for k, v in d.items()) + "}"
 
 
+def _flow_wrapped(key: str, d: dict, indent: int, width: int = 88) -> list[str]:
+    """``key: {..}`` as a flow map broken only between items, continuations indented."""
+    items = [f"{k}: {_scalar(v)}" for k, v in d.items()]
+    lines = [f"{' ' * indent}{key}: {{"]
+    cont = " " * (indent + 2)
+    for i, it in enumerate(items):
+        piece = it + ("}" if i == len(items) - 1 else ",")
+        sep = "" if lines[-1].endswith("{") else " "
+        if len(lines[-1]) + len(sep) + len(piece) > width and not lines[-1].endswith("{"):
+            lines.append(cont + piece)
+        else:
+            lines[-1] += sep + piece
+    return lines
+
+
 def _folded(key: str, text: str, indent: int) -> list[str]:
     import textwrap
 
@@ -2993,7 +3014,7 @@ def response_yaml(block: dict[str, Any], indent: int = 4) -> str:
         out.append(f"{p2}flags: [" + ", ".join(block["flags"]) + "]")
     if block.get("reason"):
         out += _folded("reason", block["reason"], indent + 2)
-    out.append(f"{p2}rule: {_flow(block['rule'])}")
+    out += _flow_wrapped("rule", block["rule"], indent + 2)
     out.append(f"{p2}reference_band_Hz: {pair(block['reference_band_Hz'])}")
     out.append(f"{p2}noise_floor: {_flow(block['noise_floor'])}")
     out.append(f"{p2}software_version: {_scalar(block['software_version'], quote=True)}")

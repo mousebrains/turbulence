@@ -116,14 +116,15 @@ REF_POINTS = (2.0, 3.0, 4.0)
 # model. NOISE_FLOOR_MAX is a REFUSAL (rule 7): see the module notes below.
 NOISE_BAND = (60.0, 100.0)  # Hz, raw frequency
 NOISE_QUIET = 0.1  # the quietest decile, by S/N over 1-10 Hz
-# Rule 7, set on synthetics (13/19.5 ms, 16 recordings, unmodelled content added
-# to one probe; docs/fp07pair/runbook.md section 6): white content that raises
-# this floor to 1.23x moves both taus by 1.0-1.5 of their 16-84% half-widths, to
-# 1.48x by 1.2-1.9; a peak at 30 Hz, inside the fit band, that raises it only to
-# 1.29x moves them by ~17. A noise MODEL 2-5x too high (the floor at 0.2-0.5x)
-# moves them by < 1, so that side is only flagged. Healthy identified deployments
-# read 1.00-1.21. Content confined to the fit band barely shows here (a 30 Hz peak
-# biasing tau by 8 half-widths read 1.08x): this test cannot catch it.
+# Rule 7, set on synthetics (scripts/fp07_tau/bead_tau_contam.py: 13/19.5 ms, 16
+# recordings, unmodelled content added to one probe; docs/fp07pair/runbook.md
+# section 6). White content raising this floor to ~1.2x moves the taus by 0.5-1.5
+# of their 16-84% half-widths (the two synthetic generators), to ~1.45x by
+# 0.8-1.9, to 1.94x by 2.3; a peak at 30 Hz, inside the fit band, raising it only
+# to 1.27-1.29x moves them by 12-18. A noise MODEL 2-5x too high (the floor at
+# 0.2-0.5x) moves them by < 1, so that side is only flagged. Healthy real
+# deployments read 1.00-1.21. Content confined to the fit band barely shows here
+# (the 30 Hz peak biasing tau by 6 half-widths read 1.05x): this cannot catch it.
 NOISE_FLOOR_MAX = 1.25  # obs/model above this on either probe: no tau
 NOISE_TOL = 1.5  # obs/model below 1/NOISE_TOL (a model too high) is only flagged
 
