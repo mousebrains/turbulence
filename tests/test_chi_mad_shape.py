@@ -30,6 +30,7 @@ import pytest
 
 from odas_tpw.chi.batchelor import KAPPA_T, batchelor_kB, kraichnan_grad
 from odas_tpw.chi.chi import (
+    FIRST_BIN,
     _chi_from_epsilon,
     _iterative_fit,
     _mle_fit_kB,
@@ -233,9 +234,9 @@ class TestUsesFomsBandAndModel:
             warnings.simplefilter("ignore")
             res = HOLE_FITTERS[name]()
         assert np.isfinite(res.fom)
-        # fom's band on every path: first to last bin above 2x noise, up to K_max
-        # (the iterative fit's k_u), on the ORIGINAL grid.
-        valid = (OBS_HOLE > 2 * NOISE_HI) & (K > 0) & (res.K_max >= K)
+        # fom's band on every path: first to last bin above 2x noise, from bin
+        # FIRST_BIN up to K_max (the iterative fit's k_u), on the ORIGINAL grid.
+        valid = (OBS_HOLE > 2 * NOISE_HI) & (np.arange(K.size) >= FIRST_BIN) & (res.K_max >= K)
         idx = np.flatnonzero(valid)
         band = slice(idx[0], idx[-1] + 1)
         model = res.spec_batch * H2 + NOISE_HI
@@ -248,7 +249,7 @@ class TestUsesFomsBandAndModel:
         assert abs(right - subset) > 0.015
         assert no_noise > right + 0.2
         if name == "iterative":
-            k_l = max(K[1], 3 * 0.04 * res.kB * np.sqrt(KAPPA_T / NU))
+            k_l = max(K[FIRST_BIN], 3 * 0.04 * res.kB * np.sqrt(KAPPA_T / NU))
             chi_band = (k_l <= K) & (res.K_max >= K)
             assert abs(right - _shape_mad(OBS_HOLE[chi_band], model[chi_band])) > 0.005
 

@@ -17,11 +17,12 @@ class TestMLEFitKBWarnings:
         """When fit_mask has < 6 valid points, _mle_fit_kB warns and returns NaN."""
         from odas_tpw.chi.chi import _mle_fit_kB
 
-        # Only 3 K points → < 6 valid → "Too few valid points" warning
-        K = np.array([1.0, 2.0, 3.0])
-        spec_obs = np.full(3, 1e-7)
-        noise_K = np.full(3, 1e-12)
-        H2 = np.ones(3)
+        # Bins 1-4: bin 1 is never used (chi.FIRST_BIN), so 3 clear the
+        # detection gate and 3 < 6 valid → "Too few valid points" warning
+        K = np.array([1.0, 2.0, 3.0, 4.0])
+        spec_obs = np.full(4, 1e-7)
+        noise_K = np.full(4, 1e-12)
+        H2 = np.ones(4)
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")

@@ -849,6 +849,7 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         "chi_fft_length": chi_merged.get("fft_length", 1024),
         "fp07_model": chi_merged.get("fp07_model", "single_pole"),
         "spectrum_model": chi_merged.get("spectrum_model", "kraichnan"),
+        "chi_first_bin": chi_merged.get("first_bin"),
     }
     # Remove None values (run_pipeline's own defaults apply: W_min resolves
     # per file from the vehicle direction, speed_method falls to "pressure")

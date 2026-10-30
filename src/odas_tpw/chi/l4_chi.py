@@ -16,9 +16,12 @@ from typing import NamedTuple
 import numpy as np
 
 from odas_tpw.chi.chi import (
+    FIRST_BIN,
     _chi_from_epsilon,
     _iterative_fit,
     _mle_fit_kB,
+    _usable_bins,
+    validate_first_bin,
 )
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 from odas_tpw.chi.fp07_pair import signal_weighted
@@ -279,6 +282,7 @@ def process_l4_chi_epsilon(
     spectrum_model: str = "kraichnan",
     f_AA: float = 98.0,
     mask_bad_buffers: bool = True,
+    first_bin: int = FIRST_BIN,
 ) -> L4ChiData:
     """Compute chi from known epsilon (Method 1).
 
@@ -292,11 +296,15 @@ def process_l4_chi_epsilon(
         'batchelor' or 'kraichnan'.
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
+    first_bin : int
+        Lowest FFT bin chi uses, DC = bin 0 (:data:`odas_tpw.chi.chi.FIRST_BIN`,
+        issue #191). 1 reproduces a product from before bin 1 was dropped.
 
     Returns
     -------
     L4ChiData
     """
+    first_bin = validate_first_bin(first_bin)
     # Pre-compute time matching
     epsi_final = l4_diss.epsi_final
     epsi_times = _to_float64_seconds(l4_diss.time)
@@ -331,6 +339,7 @@ def process_l4_chi_epsilon(
             spectrum_model,
             kappa_T,
             _dof_at(l3_chi, j),
+            first_bin=first_bin,
         )
         return (
             er.chi,
@@ -353,6 +362,7 @@ def process_l4_chi_fit(
     fit_method: str = "iterative",
     f_AA: float = 98.0,
     mask_bad_buffers: bool = True,
+    first_bin: int = FIRST_BIN,
 ) -> L4ChiData:
     """Compute chi by spectral fitting (Method 2).
 
@@ -366,11 +376,15 @@ def process_l4_chi_fit(
         'iterative' (Peterson & Fer 2014) or 'mle' (Ruddick et al. 2000).
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
+    first_bin : int
+        Lowest FFT bin chi uses, DC = bin 0 (:data:`odas_tpw.chi.chi.FIRST_BIN`,
+        issue #191). 1 reproduces a product from before bin 1 was dropped.
 
     Returns
     -------
     L4ChiData
     """
+    first_bin = validate_first_bin(first_bin)
 
     def _chi_fit_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
@@ -387,9 +401,11 @@ def process_l4_chi_fit(
                 spectrum_model,
                 kappa_T,
                 _dof_at(l3_chi, j),
+                first_bin=first_bin,
             )
         else:
-            mask = (K > 0) & (f_AA_eff / W >= K)
+            # The MLE's seed chi, over the same bins the fit may use.
+            mask = _usable_bins(K, first_bin) & (f_AA_eff / W >= K)
             if np.sum(mask) < 3:
                 return None
             chi_obs = (
@@ -422,6 +438,7 @@ def process_l4_chi_fit(
                 spectrum_model,
                 kappa_T,
                 _dof_at(l3_chi, j),
+                first_bin=first_bin,
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -441,6 +458,7 @@ def process_l4_chi_fit(
                     spectrum_model,
                     kappa_T,
                     _dof_at(l3_chi, j),
+                    first_bin=first_bin,
                 )
                 if (
                     np.isfinite(result.kB)

@@ -292,6 +292,10 @@ DEFAULTS: dict[str, dict] = {
         # epsilon and should not seed chi from it.
         "fit_method": "iterative",  # Only used when use_epsilon=False
         "spectrum_model": "kraichnan",
+        "first_bin": 2,  # Lowest FFT bin chi uses, DC = bin 0
+        # (chi.chi.FIRST_BIN, issue #191). At 1,
+        # the band before the key existed, it is
+        # dropped from the canonical view.
         "salinity": None,
         "mixing": True,  # Derived mixing quantities (N2, dTdz,
         # K_T, Gamma, K_rho) on the chi grid.
@@ -635,6 +639,10 @@ class _PerturbConfigManager(ConfigManager):
             for key, inert in (("despike_half_width", 0.04), ("record_locked_shear", False)):
                 if key in mapping and mapping[key] == inert:
                     del mapping[key]
+        if section == "chi" and mapping.get("first_bin") == 1:
+            # Same rule: bin 1 is the band from before the key existed. The
+            # default (2) is a different band, so it changes the hash.
+            del mapping["first_bin"]
         return mapping
 
     def validate_config(self, config: dict) -> None:
@@ -716,6 +724,11 @@ class _PerturbConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        first_bin = (config.get("chi") or {}).get("first_bin")
+        if first_bin is not None:
+            from odas_tpw.chi.chi import validate_first_bin
+
+            validate_first_bin(first_bin, where="chi.first_bin")
         # stratification.sort / dTdz_source pick a code path by membership, so a
         # typo would otherwise fall through to a default silently.
         strat = config.get("stratification") or {}
@@ -1626,6 +1639,10 @@ chi:
   fit_method: "iterative" # Method 2 fitting: iterative or mle (ignored if
                           # use_epsilon=true)
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
+  first_bin: 2            # lowest FFT bin chi uses (DC = 0). The per-segment
+                          # linear detrend leaves bin 1 ~30% low on a red
+                          # spectrum (issue #191); 1 reproduces a product
+                          # made before bin 1 was dropped
   salinity: null          # viscosity salinity [PSU]: null = fixed 35; a
                           # number = that fixed S; "measured" = per-profile
                           # from JAC_C/JAC_T/P (TEOS-10); "hotel" (or

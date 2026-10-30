@@ -298,6 +298,7 @@ serves both stages (there is no `chi.T_source`).
 | `use_epsilon` | bool | `true` | Method selector. `true` = Method 1 (chi from shear-probe epsilon); `false` = Method 2 spectral fit (uses `fit_method`). Set `false` for instruments where shear epsilon is unreliable, e.g. a MicroRider on a vibrating glider |
 | `fit_method` | string | `"iterative"` | Method 2 fitting: `iterative` or `mle` (ignored when `use_epsilon: true`) |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical spectrum: `batchelor` or `kraichnan` |
+| `first_bin` | int | `2` | Lowest FFT bin any chi estimate uses (DC = 0; must be >= 1). The per-segment linear detrend leaves bin 1 off the spectrum at its own wavenumber, ~30% low on the red spectra real data carry (issue #191; [chi_mathematics.md](../chi_mathematics.md#lowest-usable-bin-first_bin)). `1` reproduces a chi product made before bin 1 was dropped, and is left out of the stage signature; any other value is hashed and recorded in the chi file's `first_bin` attribute |
 | `salinity` | float \| `"measured"` \| `"hotel"` \| `null` | `null` | Salinity [PSU] for the viscosity in the chi spectral fit. `null` = fixed 35; a number = that fixed value; `"measured"` = per-profile practical salinity from the profile's own `JAC_C`/`JAC_T`/`P` (TEOS-10); `"hotel"` (or `"hotel:<var>"`) = a [hotel](#hotel--hotel-file-external-telemetry)-injected salinity channel |
 | `mixing` | bool | `true` | Append derived mixing quantities (`N2`, `dTdz`, `K_T`, `Gamma`, `K_rho`, plus the paired `epsilon_paired` for traceability) to the chi NetCDFs, on the chi window grid. The `N2` salinity follows the `stratification.salinity` setting (conductivity by default, or a hotel channel); see [mixing_efficiency.md](../mixing_efficiency.md) for definitions and masking |
 | `chi_minimum` | float | `1e-13` | Floor for `mk_chi_mean`: values <= this go to NaN |
@@ -724,8 +725,8 @@ amplitude through a ~110 ms path (issue #252):
 ```
 
 It is 1 at f → 0 and `(1-beta)^2` above its ~1-1.5 Hz corner, so across the
-chi band it is a nearly flat 0.77-0.85 in power, and the bead's chi reads
-~20-25% low. Neither the chi spectra (first bin 2 Hz at a 0.5-s FFT) nor
+chi band (from bin 2, 4 Hz at a 0.5-s FFT) it is a nearly flat 0.77-0.79 in
+power, and the bead's chi reads ~20-25% low. Neither the chi spectra (first bin 2 Hz at a 0.5-s FFT) nor
 `fp07-pair` (which calls it `ln G`) can see the corner; it was measured from
 8-s spectra of the time series.
 

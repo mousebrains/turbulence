@@ -94,6 +94,7 @@ Controls computation of the thermal variance dissipation rate (chi) from FP07 th
 | `f_AA` | float | `98.0` | Anti-aliasing filter cutoff frequency [Hz]. |
 | `fit_method` | string | `"iterative"` | Method 2 spectral fitting algorithm. `"iterative"`: Iterative integration (Peterson & Fer 2014). `"mle"`: Maximum Likelihood Estimation (Ruddick et al. 2000). Only used when epsilon is not provided. |
 | `spectrum_model` | string | `"kraichnan"` | Theoretical temperature gradient spectrum model. `"batchelor"`: Gaussian rolloff (Batchelor 1959). `"kraichnan"`: Exponential rolloff (Bogucki et al. 1997). |
+| `first_bin` | int | `2` | Lowest FFT bin any chi estimate uses (DC = 0; must be >= 1). The per-segment linear detrend leaves bin 1 off the spectrum at its own wavenumber, ~30% low on the red spectra real data carry (issue #191; [chi_mathematics.md](../chi_mathematics.md#lowest-usable-bin-first_bin)). `1` reproduces a chi product made before bin 1 was dropped and keeps that run's output-directory hash; any other value is hashed and recorded in the chi file's `first_bin` attribute. Also honored by `rsi-tpw pipeline`. |
 | `salinity` | float \| `"measured"` | `null` | Salinity for computing kinematic viscosity: a fixed PSU value, or `"measured"` (see the `epsilon` section). If `null`, uses simplified S = 35 formula. |
 | `temperature` | string \| float | `"auto"` | Reference-temperature source for viscosity/κ_T and `T_mean` (same semantics as the `epsilon` section). |
 | `conductivity` | string | `"auto"` | Conductivity channel behind `salinity: "measured"` (same semantics as the `epsilon` section). |
@@ -167,6 +168,10 @@ chi:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
+  first_bin: 2          # lowest FFT bin chi uses (DC = 0). The per-segment
+                        # linear detrend leaves bin 1 ~30% low on a red
+                        # spectrum (issue #191); 1 reproduces a product
+                        # made before bin 1 was dropped
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity/kappa_T: auto =
                         # first plausible of T1..Tn, T, JAC_T; a channel name

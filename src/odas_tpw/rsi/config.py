@@ -67,6 +67,10 @@ DEFAULTS: dict[str, dict] = {
         "f_AA": 98.0,
         "fit_method": "iterative",
         "spectrum_model": "kraichnan",
+        # Lowest FFT bin chi uses, DC = bin 0 (chi.chi.FIRST_BIN, issue #191).
+        # At 1, the band before the key existed, it is dropped from the
+        # canonical view so those hashes are unchanged.
+        "first_bin": 2,
         "salinity": None,
         "temperature": "auto",
         "conductivity": "auto",
@@ -92,6 +96,7 @@ class _RsiConfigManager(ConfigManager):
             return {
                 k: v for k, v in mapping.items()
                 if not (k in _CHI_DROP_WHEN_UNSET and v is None)
+                and not (k == "first_bin" and v == 1)
             }
         if section == "epsilon":
             # At the values that reproduce the code from before each key
@@ -110,6 +115,11 @@ class _RsiConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        first_bin = (config.get("chi") or {}).get("first_bin")
+        if first_bin is not None:
+            from odas_tpw.chi.chi import validate_first_bin
+
+            validate_first_bin(first_bin, where="[chi] first_bin")
         slow = (config.get("chi") or {}).get("fp07_slow_response")
         if slow is not None:
             from odas_tpw.chi.fp07_slow import parse_slow_response
@@ -202,6 +212,10 @@ chi:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
+  first_bin: 2          # lowest FFT bin chi uses (DC = 0). The per-segment
+                        # linear detrend leaves bin 1 ~30% low on a red
+                        # spectrum (issue #191); 1 reproduces a product
+                        # made before bin 1 was dropped
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity/kappa_T: auto =
                         # first plausible of T1..Tn, T, JAC_T; a channel name

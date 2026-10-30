@@ -218,7 +218,7 @@ H_slow(f) = (1 - beta) + beta / (1 + i*2*pi*f*tau_s)
 |H_slow(f)|^2 = (1 - beta)^2 + beta*(2 - beta) / (1 + (2*pi*f*tau_s)^2)
 ```
 
-which is 1 at `f = 0`, falls monotonically, and is `(1 - beta)^2` above the corner `~1/(2*pi*tau_s)`. For bead T2005 (beta 0.124, tau_s 110 ms) the corner is ~1.4 Hz, so over the chi band (first bin 2 Hz at a 0.5-s FFT) the path is a near-flat 0.85 → 0.77 in power. A pole model cannot represent it, and the chi spectra cannot see its corner.
+which is 1 at `f = 0`, falls monotonically, and is `(1 - beta)^2` above the corner `~1/(2*pi*tau_s)`. For bead T2005 (beta 0.124, tau_s 110 ms) the corner is ~1.4 Hz, so over the chi band (from bin 2, 4 Hz at a 0.5-s FFT) the path is a near-flat 0.79 → 0.77 in power (0.85 at bin 1, which chi does not use). A pole model cannot represent it, and the chi spectra cannot see its corner.
 
 ([`fp07_slow.py`](../src/odas_tpw/chi/fp07_slow.py)) It is applied by **equalizing the data**, as `fp07_response` is: with `e = |H_slow|^2` the observed spectrum is `S = B*|H|^2*e + N` (the electronics noise `N` is not attenuated by the bead), so
 
@@ -334,53 +334,40 @@ where `f = k * W`.
 
 **Step 3.** Compute the electronics noise spectrum `Phi_noise(k)` (Section 5).
 
-**Step 4.** Determine the upper integration limit `k_max`: the highest wavenumber where `Phi_obs(k) > 2 * Phi_noise(k)` and `k <= f_AA / W`. Falls back to the anti-aliasing limit if fewer than 3 wavenumber bins are above the noise.
+**Step 4.** Reject a non-detection: fewer bins clear `2 * Phi_noise` between the lowest usable bin (bin `first_bin`, [Section 10](#lowest-usable-bin-first_bin)) and `K_AA = f_AA / W` than the window's detection floor, which grows with the number of bins searched and falls with the spectral degrees of freedom ([`chi.py: detection_floor`](../src/odas_tpw/chi/chi.py)). chi is then NaN.
 
-**Step 5.** Compute an initial (variance-corrected) chi estimate. First integrate the observed spectrum:
+**Step 5.** Select the band: the bins from `first_bin` up to `K_AA` where `Phi_obs(k) > 2 * Phi_noise(k)`, falling back to every such usable bin when fewer than 3 qualify. chi integrates the **contiguous** span from the first to the last selected bin on the original grid, `[K_min, K_max]` (bins inside it that fall below `2 * Phi_noise` contribute their own noise-clipped excess; issue #180 F03). `K_min` is bin `first_bin` or above, never bin 1 by default and never DC.
 
-```
-V_obs = integral_0^{k_max}  Phi_obs(k)  dk
-```
-
-Then compute the correction factor for FP07 rolloff and unresolved variance:
+**Step 6.** Integrate the noise-subtracted observed spectrum over the band:
 
 ```
-V_total    = integral over all k  of  Phi_model(k; kB, chi=1)
+V_obs = integral_{K_min}^{K_max}  max(Phi_obs(k) - Phi_noise(k), 0)  dk
+```
 
-V_resolved = integral_0^{k_max}   of  Phi_model(k; kB, chi=1) * |H(k)|^2
+and compute the correction factor for FP07 rolloff and for the variance outside the band, from the model at unit chi:
+
+```
+V_total    = integral over all k        of  Phi_model(k; kB, chi=1)
+
+V_resolved = integral_{K_min}^{K_max}   of  Phi_model(k; kB, chi=1) * |H(k)|^2
 
 C = V_total / V_resolved
 ```
 
-The correction `C` accounts for two effects simultaneously:
+The correction `C` accounts for three effects simultaneously:
 - The FP07 sensor attenuates the observed spectrum (`|H|^2 < 1` at high k)
 - The integration is truncated at `k_max < inf`, missing the tail of the spectrum
+- It starts at `K_min > 0`: the model supplies the variance in `[0, K_min]`, the unused bin 1 included
 
-`C` is evaluated at unit chi because both the numerator and denominator scale linearly with chi, so the amplitude cancels; the correction depends only on the spectral *shape* (determined by `kB` and `q`). The variance-corrected estimate is:
+`C` is evaluated at unit chi because both the numerator and denominator scale linearly with chi, so the amplitude cancels; the correction depends only on the spectral *shape* (determined by `kB` and `q`).
 
-```
-chi_vc = 6 * kappa_T * V_obs * C       [K^2/s]
-```
-
-**Step 6.** Refine chi by a log-space least-squares fit. `chi_vc` is used only to center a grid search: 200 log-spaced chi values spanning 4 decades, `[0.01 * chi_vc, 100 * chi_vc]`. For each candidate chi the model spectrum is:
+**Step 7.** Report
 
 ```
-Phi_model(k; chi) = chi * S_unit(k; kB) * |H(k)|^2  +  Phi_noise(k)
+chi = 6 * kappa_T * V_obs * C       [K^2/s]
 ```
 
-where `S_unit` is the Batchelor/Kraichnan gradient spectrum at unit chi with `kB` fixed from epsilon. The cost function is the sum of squared log residuals over the valid wavenumber range:
-
-```
-cost(chi) = sum_i [ ln Phi_model(k_i; chi) - ln Phi_obs(k_i) ]^2
-```
-
-**Step 7.** Report the grid-minimizing chi:
-
-```
-chi = argmin_chi  cost(chi)       [K^2/s]
-```
-
-Minimizing in log space penalizes over- and under-estimation symmetrically on the log-log plot, and is more robust than the pure variance-correction estimate when the epsilon-derived `kB` does not perfectly match the temperature spectrum. The reported chi is not the raw grid argmin: the grid minimum is refined by fitting a parabola through the minimum and its two neighbors in `(log10 chi, cost)` space, removing the ~half-grid-step (~2.3%) quantization. If the fit fails (all costs non-finite), `chi_vc` is used.
+This linear-space (method-of-moments) estimator is unbiased for chi-squared Welch spectra and is the same amplitude form both Method-2 fits use. It replaced a log-space least-squares fit of the model to the observed spectrum, which is biased low by `exp(psi(d/2) - ln(d/2))`, about 6% at `d ~ 13` (issue #104 U3-C1).
 
 
 ## 7. Method 2a: Maximum Likelihood Estimation
@@ -417,7 +404,7 @@ Total: 200 function evaluations.
 
 ### Fitting range
 
-- **Low-k cutoff:** first wavenumber bin above the `2 * Phi_noise` criterion (fallback to all `k` in `(0, K_AA]` when fewer than 6 bins qualify)
+- **Low-k cutoff:** first wavenumber bin above the `2 * Phi_noise` criterion, at or above bin `first_bin` (fallback to every bin from `first_bin` to `K_AA` when fewer than 6 bins qualify; [Section 10](#lowest-usable-bin-first_bin))
 - **High-k cutoff:** highest `k` where `Phi_obs(k) > 2 * Phi_noise(k)` and `k <= f_AA / W`
 - Minimum 6 wavenumber points required in the fit range
 
@@ -466,7 +453,7 @@ V_resolved = integral_{K_fit_low}^{K_max_fit} of  Phi_model(k; kB_fit, chi=1) * 
 chi_obs = 6 * kappa_T * integral_{k_1}^{k_u}  max(Phi_obs(k) - Phi_noise(k), 0)  dk
 ```
 
-where `k_1` and `k_u` are the initial low and high cutoffs (from the noise intersection criterion).
+where `k_1` and `k_u` are the initial low and high cutoffs (from the noise intersection criterion, at or above bin `first_bin`).
 
 **Each iteration:**
 
@@ -483,10 +470,10 @@ Since `kB * sqrt(kappa_T / nu) = kB * Pr^(-1/2)` is the Kolmogorov wavenumber `k
 3. Refine the lower integration limit:
 
 ```
-k_l = max(K[1], 3 * k*)
+k_l = max(K[first_bin], 3 * k*)
 ```
 
-where `K[1]` is the first nonzero wavenumber bin.
+where `K[first_bin]` is the lowest usable wavenumber bin, bin 2 by default ([Section 10](#lowest-usable-bin-first_bin)).
 
 This ensures the fit range lies within the viscous-convective and viscous-diffusive subranges where the Batchelor/Kraichnan model is valid, excluding the inertial-convective subrange where the spectrum follows a different power law.
 
@@ -589,7 +576,7 @@ Alongside the amplitude correction of Section 6/8, each window also stores `var_
 V_f = integral_{K_min}^{K_max} S(k) dk / integral_0^inf S(k) dk
 ```
 
-for the model (Batchelor/Kraichnan) gradient spectrum `S`, **without** the FP07 `|H|²` (unlike the amplitude correction — including `|H|²` here would double-count the sensor response). This is the chi-side analog of the Nasmyth resolved-variance fraction on the epsilon side. It is *not* used in the per-window chi estimate; it is consumed downstream by `mk_chi_mean`, which derates the dissipation length by `V_f^{3/4}` (Lueck 2022a eq (18)) to widen `chiLnSigma` where the spectrum is truncated at `K_max`. See [perturb/dissipation_length.md](perturb/dissipation_length.md) and [`chi.chi._batchelor_resolved_fraction`](../src/odas_tpw/chi/chi.py). Because the band uses the **same** `[K_min, K_max]` as the amplitude correction (not `[0, K_max]`), `V_f` can be < 1 even for a window fully resolved at `K_max`: the low-wavenumber bound is the lowest valid data wavenumber (Method 1) or `k_l ≈ 0.04·kB·√(κ_T/ν)` (the Method-2 iterative fit). On the Method-2 ARCTERX SN479 spectra the median `V_f` was 0.84 (max 0.972).
+for the model (Batchelor/Kraichnan) gradient spectrum `S`, **without** the FP07 `|H|²` (unlike the amplitude correction — including `|H|²` here would double-count the sensor response). This is the chi-side analog of the Nasmyth resolved-variance fraction on the epsilon side. It is *not* used in the per-window chi estimate; it is consumed downstream by `mk_chi_mean`, which derates the dissipation length by `V_f^{3/4}` (Lueck 2022a eq (18)) to widen `chiLnSigma` where the spectrum is truncated at `K_max`. See [perturb/dissipation_length.md](perturb/dissipation_length.md) and [`chi.chi._batchelor_resolved_fraction`](../src/odas_tpw/chi/chi.py). Because the band uses the **same** `[K_min, K_max]` as the amplitude correction (not `[0, K_max]`), `V_f` can be < 1 even for a window fully resolved at `K_max`: the low-wavenumber bound is the lowest valid data wavenumber, bin `first_bin` or above (Method 1), or `k_l ≈ 0.04·kB·√(κ_T/ν)` (the Method-2 iterative fit). On the Method-2 ARCTERX SN479 spectra the median `V_f` was 0.84 (max 0.972).
 
 ### FP07 validity caveat
 
@@ -606,6 +593,25 @@ Temperature gradient spectra are computed using [`csd_odas`](../src/odas_tpw/sco
 - Overlap: 50% (default `fft_length // 2`)
 - Detrending: linear
 - Normalization: one-sided power spectral density in `[units^2 / Hz]`
+
+### Lowest usable bin (`first_bin`)
+
+No chi estimate uses a bin below `first_bin` (default **2**, counting DC as bin 0): not the detection gate, the band, the MLE likelihood, the chi integral, `K_min` of the variance correction, `fom`, `mad_shape`, `var_resolved` or `K_max_ratio`, on Method 1 and both Method-2 fits ([`chi.py: FIRST_BIN, _usable_bins`](../src/odas_tpw/chi/chi.py)). The spectra themselves are stored whole. The reason is the per-segment linear detrend: a straight line is not orthogonal to bin 1's one-cycle sinusoid, so the detrend removes part of bin 1's own variance, while leakage from neighboring bins adds some back. What bin 1 reads therefore depends on the spectral *slope* around it as much as on its level. Through `csd_matrix_batch` (as the chi path calls it, `fft_length` 512; one synthetic record of 2^21 samples per row, about ±0.02 Monte-Carlo error per bin), `ln(estimate / truth)` is:
+
+| spectrum near bin 1 | bin 1 | bins 2-8 |
+|---|---|---|
+| flat | -0.33 | within 0.02 |
+| rising as `k` | +0.22 | within 0.01 |
+| falling as `1/k` | -0.59 | +0.07 at bin 2, then within 0.04 |
+| falling as `1/k`, no detrend | +0.57 | +0.10 at bin 2, then within 0.04 |
+
+At real window geometry (60-63 windows per FFT length drawn from 18 VMP and glider sets, with a `1/k` low-wavenumber term added), bin 1 is low by a median `ln` 0.36, 0.38 and 0.31 at `fft_length` 256, 512 and 1024, and bins 2-8 are within 3%; with the Kraichnan spectrum and noise alone it is 2-5% low ([issue #191](https://github.com/mousebrains/turbulence/issues/191), step 2). So bin 1 is not an estimate of the spectrum at its own wavenumber, and real temperature-gradient spectra carry low-wavenumber variance (the same issue). On synthetic spectra of that kind, at `fft_length` 256, the bin-1 error moved chi by `ln` -0.032 (Method 1), +0.034 (iterative) and -0.017 (MLE) relative to chi computed from the exact spectrum by the same estimator; from bin 2 up by at most 0.001 ([`tests/test_chi_first_bin.py`](../tests/test_chi_first_bin.py)).
+
+On real data the change is mostly something else: the `[bin 1, bin 2]` interval sits where the low-wavenumber excess of issue #191 is largest, so dropping bin 1 removes that interval's observed variance while the variance correction restores only the model's share of it. With perturb and each campaign's configuration on 2 files per set, the interval held a median 29% of the observed band variance on SUNRISE 2022 PointSur against about 1% of the Kraichnan model's, and Method-1 chi fell by a median `ln` 0.30 there; 0.17 on SUNRISE 2019, 0.09 on CASPER-West, 0.02 on Taiwan 2017 and 0.01 on ARCTERX-2025 Interior. A Method-2 glider fit (Taiwan 2017 MicroRider) moved `kB` and chi up by a median `ln` 0.01 (CHANGELOG has the full table).
+
+The epsilon (shear) path is unchanged: its variance integral starts at DC, and its inertial-subrange fit and QC at bin 1, on spectra detrended the same way. Whether bin 1 matters there is not measured.
+
+`chi.first_bin` (perturb and `rsi-tpw`; `chi_first_bin` in `run_pipeline`) changes it; `1` reproduces a product made before bin 1 was dropped, bit for bit. A value other than 1 is recorded in the chi file's `first_bin` attribute and hashed into the chi stage signature; at 1 the key is left out of both, as before it existed.
 
 ### Frequency to wavenumber conversion
 
@@ -693,6 +699,7 @@ The profile is divided into overlapping windows of length `diss_length` samples 
 | `fp07_model` | `single_pole` | FP07 transfer function model |
 | `spectrum_model` | `kraichnan` | Theoretical spectrum (batchelor or kraichnan) |
 | `fit_method` | `iterative` | Method 2 fitting algorithm (mle or iterative) |
+| `first_bin` | `2` | Lowest FFT bin any chi estimate uses, DC = bin 0 ([Section 10](#lowest-usable-bin-first_bin)) |
 | `goodman` | `True` | Goodman coherent noise removal using accelerometers |
 
 These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.py), [`rsi/config.py`](../src/odas_tpw/rsi/config.py)). The `perturb` campaign pipeline uses different, duration-based defaults — `fft_sec = 1.0` for both chi and epsilon, resolved to samples at each instrument's sampling rate (512 samples on a 512-Hz VMP-250; numerically identical to the old 512-sample chi default at that rate), see [`perturb/config.py`](../src/odas_tpw/perturb/config.py) and [perturb/dissipation_length.md](perturb/dissipation_length.md).

@@ -697,9 +697,18 @@ class TestChiIo:
         good = np.isfinite(a[0]) & np.isfinite(b[0])
         assert good.sum() >= 3
         # e = c < 1 on T1 raises its chi by up to 1/c: in full where the
-        # window is signal-dominated, less where noise-floor bins carry weight
+        # window is signal-dominated, less where noise-floor bins carry weight.
+        # That bound is exact where the Method-2 fit lands on the same kB; the
+        # weighted e reshapes the spectrum slightly, so a window may land one
+        # step of the MLE's fine kB grid (~1.5%) away, which moves its chi
+        # variance correction by a few percent (one of 11 windows here).
         r = b[0][good] / a[0][good]
-        assert np.all(r >= 1 - 1e-12) and np.all(r <= 1 / c + 1e-9)
+        kb_r = ds["kB"].values[0][good] / plain["kB"].values[0][good]
+        same = kb_r == 1.0
+        assert same.sum() >= len(r) - 1
+        assert np.all(np.abs(np.log(kb_r)) < 0.02)
+        assert np.all(r >= 1 - 1e-12) and np.all(r[same] <= 1 / c + 1e-9)
+        assert np.all(r <= 1.05 / c)
         assert np.median(r) > 1.1
         np.testing.assert_array_equal(b[1], a[1])
         np.testing.assert_allclose(ds["fp07_response_ln_e"].values[0], np.log(c))
