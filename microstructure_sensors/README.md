@@ -67,6 +67,17 @@ from the configs in two places:
   two files are counted under T3304, which is an assumption.
 - **A bench-test file is left out.**
 
+VMP SN 142's sh2 at ARCTERX-2025 Interior is likewise attributed by probe,
+not by config. Every config says M1218 (sens 0.0629), but the row gives
+**M1281**. A photo of six of the campaign's probe sleeves (owner,
+2026-10-30) shows one labeled "M1281 600BAR, 2021-04-28 S= 0.0629" and none
+labeled M1218. Beside it is "M1254 600bar, 2021-04-27 S= 0.0739", the
+instrument's sh1. M1218's only sheet is 0.0797 (2014). So the configured
+serial is a transposition, and the configured value is the M1281 sleeve's.
+The other legible sleeve labels match their configs and sheets: M2244
+2020-03-10 0.0678, and M3037 2024-07-15 0.0952. M1281's sheets are
+requested.
+
 B's FP07s stay as the placeholder `T`. The resistance evidence makes T2
 very likely T3308. T1 is T3306 or T3302, and the evidence cannot separate
 them. (T2 drifted +1.4% in resistance during the deployment.)
@@ -476,9 +487,20 @@ mainly on the printed suffix.
 `M3039_2024_07_15.pdf` apart from the serial number — same sensitivity, `c`,
 capacitance, calibration temperature, DC offset and data page — and its
 "previous" entry contradicts M3038's own `M3038_2024_07_09.pdf` (0.1189 vs
-0.1093). It is very likely M3039's report mis-issued under M3038's serial, so
-both M3038 rows sourced from it are annotated `SUSPECT` in `notes`. Confirm
-with Rockland before using M3038's 2024-07-15 sensitivity. No other sheet in
+0.1093). It is very likely M3039's report mis-issued under M3038's serial.
+**Resolved 2026-10-30:** Rockland gives MR SN 435's sensitivities at
+ARCTERX-2025 Interior as **M3038 0.1093 and M3039 0.1189**, the 2024-07-09
+calibrations, and the owner discounts **both** 2024-07-15 sheets (M3038's and
+M3039's, each printing 0.1041). They are filed under `discounted/`, which
+`cal-csv` and `sensors --cal-dir` do not read (both take `*.pdf` in this
+directory only), and the three registry rows sourced from them are annotated
+`DISCOUNTED` (`cal-csv` still reports the M3038 2024-07-09 conflict, from
+those rows). Both probes' sleeves read "2024-07-15 S:0.1041 @15°C" (owner's
+photos, 2026-10-30), which is how 0.1041 reached the configs. MR SN 435 carried 0.1041 on both channels for the whole
+deployment, so its ε is 1.10× high on sh1 and 1.30× high on sh2 until the
+files are patched (`rsi-tpw patch-config`). The owner holds the 2024-07-09
+values forward until the next calibration. RIOT 2026 is therefore affected
+too (`sheet_requests.md`). No other sheet in
 the directory shares a probe-specific fingerprint with another (re-checked
 2026-10-12 over all 190 sheets: angle tables for the tabular form;
 capacitance, `c`, temperature and DC offset for the rest).

@@ -230,9 +230,12 @@ which has not been run. The configs that disagree with a now-held sheet:
   recalibrated probe flew, sh1 ε is 1.80× low.
 - **VMP SN 194, SUNRISE 2022 Point Sur: sh2 M289 0.0725** is its 2016 sheet;
   the 2021-04-27 recalibration says **0.0794** (ε 1.20× high if that is right).
-- **VMP SN 142, ARCTERX-2025 Interior: sh2 M1218 0.0629** matches no sheet.
-  The only one held is 2014-12-15, 0.0797, so this is most likely a later
-  calibration we don't have.
+- **VMP SN 142, ARCTERX-2025 Interior: sh2 M1218 0.0629** matches no M1218
+  sheet (the only one is 2014-12-15, 0.0797). **Answered 2026-10-30: the probe
+  is M1281**, and the configured serial is a transposition. A photo of the
+  campaign's probe sleeves shows "M1281 600BAR, 2021-04-28 S= 0.0629" and no
+  M1218 (README, *sensor_deployments.csv*). It was ~46 months old at use, as sh1 M1254's
+  2021-04-27 calibration was (M1254 read 0.0847 by 2026-04-28).
 - **The CASPER-East rows for M1344 / M1371 also flag**, only at their last
   date, 2016-08-08. That date comes from `CAS_170`, a stray file whose header
   is dated ten months after the cruise and which yields no data. The cruise
@@ -243,11 +246,31 @@ which has not been run. The configs that disagree with a now-held sheet:
   2024-07-18 calibrations of **M3054 / M3055** (the "previous" entries on their
   2024-07-26 sheets). Both channels match, which suggests the probes fitted
   were M3054/M3055 under stale serials.
+- **MR SN 435, ARCTERX-2025 Interior: sh1 M3038 and sh2 M3039 are both
+  configured 0.1041** (every file from 2025-01-30 04:54Z to 04-10), the value
+  of the discounted 2024-07-15 sheets. Rockland gives 0.1093 / 0.1189, so ε is
+  **1.10× high (sh1) and 1.30× high (sh2)**. MR SN 433's M3036 0.1223 and
+  M3037 0.0952 are their 2024-07-15 sheets, which stand.
+  The sleeves of both probes are printed with 0.1041, so the same value
+  recurs wherever they flew:
+  - RIOT 2026 shakedown, MR SN 435, both probes: 457 files, 03-17 to 03-30.
+  - RIOT 2026 IOP, VMP SN 412, sh1 M3038: 9 files, 08-21 to 08-24.
+  - A 10-file copy of ARCTERX-2025 data (2025-04-04/05) under
+    `Rockland-2025/SL685`.
+
+  Rockland's values were given for ARCTERX-2025 Interior. **The owner's
+  decision (2026-10-30): the 2024-07-09 values are held forward until the next
+  calibration**, so they govern the RIOT 2026 uses as well. That is the
+  registry's hold-previous rule. The RIOT shakedown MR's ε is 1.10× high (sh1)
+  and 1.30× high (sh2), and VMP SN 412's sh1 ε over those 9 files is 1.10×
+  high.
 
 ## Next request (not yet sent)
 
-1. **M1218** — any calibration after 2014-12-15 (the 0.0629 in the
-   ARCTERX-2025 Interior config).
+1. **M1281** — its sheets (2021-04-28, 0.0629) and any later calibration.
+   It flew as VMP SN 142's sh2 at ARCTERX-2025 Interior under the configured
+   serial M1218. A calibration after 2025-02 would bound its drift at use. The
+   owner is requesting these (2026-10-30).
 2. **M1194 / M1196-B** — is the 2016-04-07 "M1194" sheet (0.0793, 1.087 nF,
    sent to OSU as `M1194_2_...`) the same physical probe as the M1194 that
    read 0.0549 on 2016-03-14 and 0.0551 on 2016-04-18 (0.846–0.941 nF over
@@ -258,4 +281,9 @@ which has not been run. The configs that disagree with a now-held sheet:
 4. **Wrong "previous calibration" dates** — re-issue M2245, M3036 and M3037
    (2026-04-28), M1194 (2026-06-22) and M1496 (2022-06-20) with the previous
    date corrected, as Rockland already did for M1254 and M1458 on 2026-07-03.
-5. **M3038 2024-07-15** — still outstanding (README, *Known bad sheets*).
+5. ~~**M3038 2024-07-15**~~ — answered 2026-10-30: MR SN 435 used M3038 0.1093
+   and M3039 0.1189 (the 2024-07-09 calibrations); both 2024-07-15 sheets are
+   discounted (README, *Known bad sheets*).
+6. **M3038 / M3039 after 2024-07** — any later calibration. Until one exists
+   the 2024-07-09 values are held forward (owner), including through their
+   RIOT 2026 use (MR SN 435 in March, VMP SN 412 in August).
