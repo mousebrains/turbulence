@@ -184,10 +184,10 @@ M3037,2024-07-09,0.1093,V/(m^2 s^-2),sheet,M3037_2024_07_15.pdf,,,previous-calib
 M3037,2024-07-15,0.0952,V/(m^2 s^-2),sheet,M3037_2024_07_15.pdf,2025-07-15,2024-07-05,
 M3037,2026-04-28,0.0815,V/(m^2 s^-2),sheet,M3037_2026_04_28.pdf,2027-04-28,2024-07-05,
 M3038,2024-07-09,0.1093,V/(m^2 s^-2),sheet,M3038_2024_07_09.pdf,2025-07-09,2024-07-05,
-M3038,2024-07-09,0.1189,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,,,"SUSPECT — contradicts M3038's own 2024-07-09 sheet (0.1093). M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial, so this attests M3039's history not M3038's; do not use"
-M3038,2024-07-15,0.1041,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,2025-07-15,2024-07-05,"SUSPECT — M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial (same sens, c, capacitance, temperature, DC offset and data page); likely M3039's report mis-issued under M3038; confirm with Rockland before use"
+M3038,2024-07-09,0.1189,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,,,"DISCOUNTED (owner, 2026-10-30) — contradicts M3038's own 2024-07-09 sheet (0.1093). M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial, so this attests M3039's history not M3038's. Rockland gives 0.1093 for M3038 on MR SN 435 at ARCTERX-2025 Interior; do not use. The sheet is filed under discounted/ (README, Known bad sheets)"
+M3038,2024-07-15,0.1041,V/(m^2 s^-2),sheet,M3038_2024_07_15.pdf,2025-07-15,2024-07-05,"DISCOUNTED (owner, 2026-10-30) — M3038_2024_07_15.pdf is character-identical to M3039_2024_07_15.pdf apart from the serial (same sens, c, capacitance, temperature, DC offset and data page). Rockland gives 0.1093 (the 2024-07-09 calibration) for M3038 on MR SN 435 at ARCTERX-2025 Interior; do not use. The sheet is filed under discounted/ (README, Known bad sheets)"
 M3039,2024-07-09,0.1189,V/(m^2 s^-2),sheet,M3039_2024_07_09.pdf,2025-07-09,2024-07-05,
-M3039,2024-07-15,0.1041,V/(m^2 s^-2),sheet,M3039_2024_07_15.pdf,2025-07-15,2024-07-05,
+M3039,2024-07-15,0.1041,V/(m^2 s^-2),sheet,M3039_2024_07_15.pdf,2025-07-15,2024-07-05,"DISCOUNTED (owner, 2026-10-30) — Rockland gives 0.1189 (the 2024-07-09 calibration) for M3039 on MR SN 435 at ARCTERX-2025 Interior, not this sheet's 0.1041; do not use. The sheet is filed under discounted/ (README, Known bad sheets)"
 M3054,2024-07-18,0.1075,V/(m^2 s^-2),sheet,M3054_2024_07_26.pdf,,,previous-calibration entry on this sheet
 M3054,2024-07-26,0.1073,V/(m^2 s^-2),sheet,M3054_2024_07_26.pdf,2025-07-26,2024-07-15,
 M3054,2025-03-31,0.1074,V/(m^2 s^-2),sheet,M3054_2025_03_31.pdf,2026-03-31,2024-07-15,

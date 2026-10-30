@@ -243,6 +243,11 @@ which has not been run. The configs that disagree with a now-held sheet:
   2024-07-18 calibrations of **M3054 / M3055** (the "previous" entries on their
   2024-07-26 sheets). Both channels match, which suggests the probes fitted
   were M3054/M3055 under stale serials.
+- **MR SN 435, ARCTERX-2025 Interior: sh1 M3038 and sh2 M3039 are both
+  configured 0.1041** (every file from 2025-01-30 04:54Z to 04-10), the value
+  of the discounted 2024-07-15 sheets. Rockland gives 0.1093 / 0.1189, so ε is
+  **1.10× high (sh1) and 1.30× high (sh2)**. MR SN 433's M3036 0.1223 and
+  M3037 0.0952 are their 2024-07-15 sheets, which stand.
 
 ## Next request (not yet sent)
 
@@ -258,4 +263,6 @@ which has not been run. The configs that disagree with a now-held sheet:
 4. **Wrong "previous calibration" dates** — re-issue M2245, M3036 and M3037
    (2026-04-28), M1194 (2026-06-22) and M1496 (2022-06-20) with the previous
    date corrected, as Rockland already did for M1254 and M1458 on 2026-07-03.
-5. **M3038 2024-07-15** — still outstanding (README, *Known bad sheets*).
+5. ~~**M3038 2024-07-15**~~ — answered 2026-10-30: MR SN 435 used M3038 0.1093
+   and M3039 0.1189 (the 2024-07-09 calibrations); both 2024-07-15 sheets are
+   discounted (README, *Known bad sheets*).

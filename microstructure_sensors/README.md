@@ -476,9 +476,17 @@ mainly on the printed suffix.
 `M3039_2024_07_15.pdf` apart from the serial number — same sensitivity, `c`,
 capacitance, calibration temperature, DC offset and data page — and its
 "previous" entry contradicts M3038's own `M3038_2024_07_09.pdf` (0.1189 vs
-0.1093). It is very likely M3039's report mis-issued under M3038's serial, so
-both M3038 rows sourced from it are annotated `SUSPECT` in `notes`. Confirm
-with Rockland before using M3038's 2024-07-15 sensitivity. No other sheet in
+0.1093). It is very likely M3039's report mis-issued under M3038's serial.
+**Resolved 2026-10-30:** Rockland gives MR SN 435's sensitivities at
+ARCTERX-2025 Interior as **M3038 0.1093 and M3039 0.1189**, the 2024-07-09
+calibrations, and the owner discounts **both** 2024-07-15 sheets (M3038's and
+M3039's, each printing 0.1041). They are filed under `discounted/`, which
+`cal-csv` and `sensors --cal-dir` do not read (both take `*.pdf` in this
+directory only), and the three registry rows sourced from them are annotated
+`DISCOUNTED` (`cal-csv` still reports the M3038 2024-07-09 conflict, from
+those rows). MR SN 435 carried 0.1041 on both channels for the whole
+deployment, so its ε is 1.10× high on sh1 and 1.30× high on sh2 until the
+files are patched (`rsi-tpw patch-config`). No other sheet in
 the directory shares a probe-specific fingerprint with another (re-checked
 2026-10-12 over all 190 sheets: angle tables for the tabular form;
 capacitance, `c`, temperature and DC offset for the rest).
