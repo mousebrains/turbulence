@@ -258,9 +258,12 @@ which has not been run. The configs that disagree with a now-held sheet:
   - A 10-file copy of ARCTERX-2025 data (2025-04-04/05) under
     `Rockland-2025/SL685`.
 
-  Rockland's values were given for ARCTERX-2025 Interior. Whether the
-  2024-07-09 calibrations also govern 2026, by then 20+ months old, or a later
-  calibration exists, is still to be asked.
+  Rockland's values were given for ARCTERX-2025 Interior. **The owner's
+  decision (2026-10-30): the 2024-07-09 values are held forward until the next
+  calibration**, so they govern the RIOT 2026 uses as well. That is the
+  registry's hold-previous rule. The RIOT shakedown MR's ε is 1.10× high (sh1)
+  and 1.30× high (sh2), and VMP SN 412's sh1 ε over those 9 files is 1.10×
+  high.
 
 ## Next request (not yet sent)
 
@@ -281,6 +284,6 @@ which has not been run. The configs that disagree with a now-held sheet:
 5. ~~**M3038 2024-07-15**~~ — answered 2026-10-30: MR SN 435 used M3038 0.1093
    and M3039 0.1189 (the 2024-07-09 calibrations); both 2024-07-15 sheets are
    discounted (README, *Known bad sheets*).
-6. **M3038 / M3039 after 2024-07** — any calibration before their RIOT 2026
-   use (MR SN 435 in March, VMP SN 412 in August), all configured with the
-   sleeves' 0.1041.
+6. **M3038 / M3039 after 2024-07** — any later calibration. Until one exists
+   the 2024-07-09 values are held forward (owner), including through their
+   RIOT 2026 use (MR SN 435 in March, VMP SN 412 in August).

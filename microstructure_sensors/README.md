@@ -498,7 +498,9 @@ directory only), and the three registry rows sourced from them are annotated
 those rows). Both probes' sleeves read "2024-07-15 S:0.1041 @15°C" (owner's
 photos, 2026-10-30), which is how 0.1041 reached the configs. MR SN 435 carried 0.1041 on both channels for the whole
 deployment, so its ε is 1.10× high on sh1 and 1.30× high on sh2 until the
-files are patched (`rsi-tpw patch-config`). No other sheet in
+files are patched (`rsi-tpw patch-config`). The owner holds the 2024-07-09
+values forward until the next calibration. RIOT 2026 is therefore affected
+too (`sheet_requests.md`). No other sheet in
 the directory shares a probe-specific fingerprint with another (re-checked
 2026-10-12 over all 190 sheets: angle tables for the tabular form;
 capacitance, `c`, temperature and DC offset for the rest).
