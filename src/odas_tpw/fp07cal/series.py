@@ -55,6 +55,10 @@ class ProbeSeries:
     """Channel -> counts blanked (set NaN) as RDL bad buffers; see :func:`load_probe_series`."""
     bad_buffer_dropped: list[str] = field(default_factory=list)
     """Channels blanked WHOLE in this file: a marker run smears their deconvolution file-wide."""
+    alive: dict[str, bool] = field(default_factory=dict)
+    """Channel -> did the bead record live data here (:func:`thermistor_alive`), as recorded.
+
+    Empty for a series built by hand; :func:`bead_alive` then judges the counts held."""
 
     @property
     def fs(self) -> float:
@@ -362,7 +366,9 @@ def load_probe_series(
     probe_sn: dict[str, str] = {}
     bad_buffer: dict[str, int] = {}
     dropped: list[str] = []
+    alive: dict[str, bool] = {}
     ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
+    fs = 1.0 / float(np.median(np.diff(t))) if n > 1 else float("nan")
     for name in wanted:
         if name not in pf.channels_raw or name not in by_name:
             continue
@@ -373,6 +379,11 @@ def load_probe_series(
             raw[:n] if raw.size >= n
             else np.pad(raw, (0, n - raw.size), constant_values=np.nan)
         )
+        cfg = by_name[name]
+        bridge[name] = BridgeParams.from_channel_config(cfg, name)
+        # Judged on the counts as recorded, before any blanking: a file left out
+        # for a marker run below still had a live bead in it.
+        alive[name] = thermistor_alive(counts[name], bridge[name], fs)
         bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
         if bad is not None and _smeared_file_wide(pf, name):
             bad = np.ones(n, dtype=bool)
@@ -383,8 +394,6 @@ def load_probe_series(
                 # A copy: the slice can be a view onto pf.channels_raw.
                 counts[name] = np.where(blank, np.nan, counts[name])
                 bad_buffer[name] = int(blank.sum())
-        cfg = by_name[name]
-        bridge[name] = BridgeParams.from_channel_config(cfg, name)
         factory[name] = config_to_coeffs(cfg)
         beta_key[name] = live_beta_key(cfg)
         probe_sn[name] = str(cfg.get("sn", "") or "").strip() or "(no SN)"
@@ -436,7 +445,77 @@ def load_probe_series(
         speed=speed,
         bad_buffer=bad_buffer,
         bad_buffer_dropped=dropped,
+        alive=alive,
     )
+
+
+ALIVE_WINDOW_S = 4.0
+"""[s] The window a thermistor is judged dead or alive on: a chi dissipation window
+(4 x 1 s FFT), the unit fp07-pair's dead-bead rule judges."""
+
+ALIVE_MIN_RANGE_L = 4e-4
+"""The least 1-99% range of ``L`` over a file that is live data: ~10 mK of an FP07
+(``|dT/dL|`` 25-30 K in the calibration sheet).  SN465's bench test probes, one
+reading its config's ``T_0`` at 16.145 degC, span 0.6-1.0 mK over files that hold
+detected profiles; profiling beads span hundreds of mK to tens of K (osu684 2023 and
+2025, osu685 2023: at least 3.8 K in a sample of 84 such channel files)."""
+
+
+def thermistor_alive(counts: np.ndarray, bridge: BridgeParams, fs: float) -> bool:
+    """Did this thermistor record live data in this file?  (issue #249)
+
+    fp07-pair's dead-bead rule, on the counts rather than the spectrum: a window
+    is dead when the counts do not move at all (an identically zero gradient
+    spectrum) or when any of it is pinned on the ADC, where a live bead never
+    goes (fp07cal's
+    ``clipped_counts``: SUNRISE 2021 Pelican's T2 through SR1P_516, and SN465's
+    open test port at -17.087 degC), and the file is dead for the bead when at
+    least ``DEAD_FILE_FRAC`` (half) of its windows are.  A file whose ``L`` spans
+    less than :data:`ALIVE_MIN_RANGE_L` is dead too, constant through the file
+    but for electronics noise: a test probe reading its ``T_0``, whose spectrum
+    is not identically zero.  Windows with no finite count are not judged; a
+    file with none is not alive.
+    """
+    from odas_tpw.chi.fp07_bead_tau import DEAD_FILE_FRAC
+    from odas_tpw.fp07cal.logr import log_r
+
+    c = np.asarray(counts, dtype=np.float64)
+    if c.size == 0:
+        return False
+    with np.errstate(invalid="ignore"):
+        L, clipped = log_r(c, bridge)
+    live = np.isfinite(L) & ~clipped
+    if not live.any():
+        return False
+    lo, hi = np.percentile(L[live], [1, 99])
+    if hi - lo < ALIVE_MIN_RANGE_L:
+        return False
+    w = max(2, round(ALIVE_WINDOW_S * fs)) if np.isfinite(fs) and fs > 0 else c.size
+    judged = dead = 0
+    for i in range(0, c.size, w):
+        x, k = c[i: i + w], clipped[i: i + w]
+        ok = np.isfinite(x)
+        if not ok.any():
+            continue
+        judged += 1
+        if np.ptp(x[ok]) == 0 or k[ok].any():
+            dead += 1
+    return judged > 0 and dead < DEAD_FILE_FRAC * judged
+
+
+def bead_alive(probe: ProbeSeries, channel: str) -> bool:
+    """:attr:`ProbeSeries.alive` for *channel*, or judged on the counts the series holds.
+
+    Duck-typed series lacking what it needs are not judged alive.
+    """
+    alive = getattr(probe, "alive", None) or {}
+    if channel in alive:
+        return bool(alive[channel])
+    counts = getattr(probe, "counts", None) or {}
+    bridge = getattr(probe, "bridge", None) or {}
+    if counts.get(channel) is None or channel not in bridge:
+        return False
+    return thermistor_alive(counts[channel], bridge[channel], probe.fs)
 
 
 def bad_buffer_mask(pf: Any, name: str) -> np.ndarray:

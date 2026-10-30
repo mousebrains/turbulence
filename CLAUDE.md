@@ -112,9 +112,11 @@ block its output is byte-identical. With or without it, an exported curve must b
 beta `1/(d(1/T_K)/dL)` within 2723-3416 K over its range (`prior.FP07_BETA_K`, the sheet's
 2995-3105 K, +-10%; a test holds it to the sheet), or the channel is refused (#247).
 `fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
-It takes `first`/`last`/`n_files` from the channel's own `span` in the record (`fp07-cal/2`, #249:
-the files that gave it a kept pair), never the run's; an `fp07-cal/1` record is still read, with
-the run's span and a NOTE.
+It takes `first`/`last`/`n_files` from the channel's own `span` in the record (`fp07-cal/2`, #249):
+the TIME THE BEAD WAS ALIVE over every file of the run (the PI's decision; dead = half its 4 s
+windows frozen or on the ADC rail, or < ~10 mK over the file), never the run's or the subsample's;
+`first_kept_pair`/`last_kept_pair` are the calibration's support. An `fp07-cal/1` record is still
+read, with the run's span and a NOTE.
 An entry may carry a `response:` block, the bead's measured FP07 tau (a bead property
 carried with its calibration); `fp07-cal registry response` inserts it as text from an
 `fp07-pair tau` record. Tau is at the pair's own speed `W_ref` and is never converted to

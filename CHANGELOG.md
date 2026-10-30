@@ -448,16 +448,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   SUNRISE 2021 Pelican's T1593 (on the ADC rail through SR1P_516) got
   2021-06-29T10:33Z and 12 files, corrected by hand in #243 to
   2021-06-28T02:58:43Z and 11. The record is now `schema: fp07-cal/2`: each
-  exported channel carries a `span` (`time_start`, `time_end` and `n_files`
-  of the files that gave it a pair its fit kept, first sample of the first to
-  last of the last, which is the sheet's convention for `first`/`last`; and
-  the kept pairs' own `first_pair`/`last_pair`), and `registry add` uses it.
-  The console says when a channel's files are fewer than the run's. Nothing
-  else in the record changed: `patch` and `registry add` still read an
-  `fp07-cal/1` record, and `registry add` takes the run's span from it, as
-  before, with a NOTE. Refitting SUNRISE 2021 Pelican's first 12 files and
-  adding T2 reproduces #243's corrected entry: first 2021-06-22T01:39:05Z,
-  last 2021-06-28T02:58:43Z, `n_files` 11.
+  exported channel carries a `span`, and `registry add` uses it. A bead's
+  `first`/`last`/`n_files` are the TIME IT WAS ALIVE (the PI's decision,
+  2026-10-29), not the files that gave it pairs: the files of the run in which
+  its thermistor recorded live data, first sample of the first to last of the
+  last (`time_start`, `time_end`, `n_files`, `n_files_dead`). A file is dead
+  for a bead by fp07-pair's dead-bead rule on the counts
+  (`series.thermistor_alive`): half or more of its 4 s windows have counts that do not
+  move or touch the ADC rail (`clipped_counts`; SUNRISE 2021 Pelican's T2
+  through SR1P_516, SN465's open test port at -17.087 degC), or the whole
+  file spans less than ~10 mK of an FP07 (4e-4 in L: a test probe reading
+  its `T_0`, 0.6-1.0 mK). Judged on the counts as recorded, before any
+  bad-buffer blanking. `fp07-cal fit` measures it over EVERY file of the run in
+  its streaming pass, not the `max_fit_files` subsample, whose stride could
+  end a dying bead a file early; with `--no-stream` on a subsample `from`
+  says so and `registry add` prints a NOTE. `first_kept_pair`/
+  `last_kept_pair` keep the extent of the pairs the fit kept, the
+  calibration's support. Nothing else in the record changed: `patch` and
+  `registry add` still read an `fp07-cal/1` record, and `registry add` takes
+  the run's span from it, as before, with a NOTE. Refitting SUNRISE 2021
+  Pelican's first 12 files and adding T2 reproduces #243's corrected entry:
+  first 2021-06-22T01:39:05Z, last 2021-06-28T02:58:43Z, `n_files` 11 (one
+  file dead), and T1592's and T2005's spans there match the sheet. On the
+  glider runs, over every file (the sheet is not edited): osu684 2023 and the
+  screened osu685 2023 T2 match the sheet; osu685 2023 T1 (screened) has the
+  sheet's span in 592 files, not the 154 fitted; osu684 2025 is alive
+  2025-02-04T00:42:20Z .. 02-10T02:54:58Z in 119 files (sheet: 01:06:01 ..
+  01:21:19, 45) and osu685 2025 2025-02-04T01:19:54Z .. 04-10T22:50:50Z in
+  797 (sheet: 07:42:26 .. 15:36:58, 103): the sheet's glider entries carry
+  the fitted subsample's span and count.
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

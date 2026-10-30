@@ -288,15 +288,25 @@ fp07-cal registry add fp07cal/coefficients.json --channel T1 \
 It builds the entry from `coefficients.json` and the block table of
 `<ch>_report.md` beside it, and takes from the options only what the record
 cannot supply. The entry's `first`, `last` and `fit.n_files` are the
-channel's own (issue #249): the record (`schema: fp07-cal/2`) carries a
-`span` per exported channel, the files that gave it a pair its fit kept, from
-the first sample of the first to the last of the last, plus the kept pairs'
-own `first_pair`/`last_pair`. A bead that died before the run ended gets its
-own end: SUNRISE 2021 Pelican's T1593, on the ADC rail through SR1P_516,
-ends 2021-06-28T02:58:43Z in 11 files, not at the run's 2021-06-29T10:33Z
-in 12. An `fp07-cal/1` record (before #249) has only the run's span; it is
-still read, by `patch` too, and `registry add` takes the run's span and file
-count from it and says so. It adds the entry to the YAML as text, leaving every existing
+time the bead was ALIVE (issue #249): the record (`schema: fp07-cal/2`)
+carries a `span` per exported channel, the files of the run in which its
+thermistor recorded live data, from the first sample of the first to the last
+of the last. A file is dead for a bead when half or more of its 4 s windows
+have counts that do not move or touch the ADC rail (fp07-pair's dead-bead
+rule, with `clipped_counts`), or when the whole file spans less than ~10 mK
+(a test probe reading its `T_0`). `fp07-cal fit` judges every file of the run
+in its streaming pass; with `--no-stream` on a `max_fit_files` subsample the
+span's `from` says so, and `registry add` warns that a dying bead's end can be
+a file stride off. A bead that died before the run ended gets its own end:
+SUNRISE 2021 Pelican's T1593, on the ADC rail through SR1P_516, ends
+2021-06-28T02:58:43Z in 11 files, not at the run's 2021-06-29T10:33Z in 12.
+`first_kept_pair`/`last_kept_pair` are the extent of the pairs the fit kept,
+the calibration's support, which can be much shorter (a glider with CT on
+some yos). A bead swinging between the rail and nonsense in fewer than half
+its windows still counts as alive: screen such files out (`files.exclude`). An
+`fp07-cal/1` record (before #249) has only the run's span; it is still read,
+by `patch` too, and `registry add` takes the run's span and file count from it
+and says so. It adds the entry to the YAML as text, leaving every existing
 line and comment untouched, then validates the whole sheet and re-renders the
 `.md` and `.csv`. `--dry-run` prints the entry and writes nothing. It refuses:
 

@@ -2411,11 +2411,12 @@ def _epoch_iso(t: object, where: str) -> str:
 def channel_span(record: dict, channel: str) -> tuple[str, str, int]:
     """``(first, last, n_files)`` of *channel* in an ``fp07-cal fit`` record, for the sheet.
 
-    An ``fp07-cal/2`` record carries each channel's own ``span``: the files
-    that gave the channel at least one pair its fit kept, from the first
+    An ``fp07-cal/2`` record carries each channel's own ``span``: the files of
+    the run in which its bead was alive (recorded live data), from the first
     sample of the first to the last sample of the last (issue #249).  That is
-    the sheet's convention for ``first``/``last``, a span of FILES, not of
-    pairs; a channel whose bead died before the run ended gets its own end.
+    the sheet's convention for ``first``/``last``, the time the bead was in
+    service, a span of FILES, not of pairs; a bead that died before the run
+    ended gets its own end.
     An ``fp07-cal/1`` record predates it and has only the run's span and file
     count, which are what it gives, as before.
     """

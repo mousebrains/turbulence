@@ -54,8 +54,9 @@ SCHEMA = "fp07-cal/2"
 """The ``schema`` value ``fp07-cal fit`` writes.
 
 ``/2`` (issue #249) adds each exported channel's own ``span``: ``time_start``,
-``time_end`` and ``n_files`` of the files that gave it a pair its fit kept, and
-``first_pair``/``last_pair``.  Nothing else changed, so ``patch`` and
+``time_end`` and ``n_files`` of the files of the run in which its bead was alive
+(``n_files_dead``, ``from``), and ``first_kept_pair``/``last_kept_pair``, the
+extent of the pairs the fit kept.  Nothing else changed, so ``patch`` and
 ``registry add`` read a ``/1`` record as before (:data:`LEGACY_SCHEMAS`).
 """
 

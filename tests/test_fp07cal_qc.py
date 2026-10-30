@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import struct
 from pathlib import Path
 
@@ -359,25 +360,6 @@ def test_a_dropped_file_is_named_in_the_record_and_report(tmp_path):
     assert "left out of each such file whole" in report and "header word 16" in report
 
 
-def test_the_reference_recipe_masks_pressure_with_its_partner(tmp_path):
-    """Runbook section 8 blanks P where P_dP dropped out too, over the deconvolution's
-    3 diff_gain, as chi masks it; a clean channel gets an all-False mask."""
-    from odas_tpw.fp07cal.series import bad_buffer_mask
-    from odas_tpw.rsi.channels import config_number
-
-    hit = tmp_path / "pdp.p"
-    hit.write_bytes(_sentinels(VMP_P.read_bytes(), "P_dP", 200))
-    with pytest.warns(UserWarning, match="bad-buffer markers"):
-        pf = PFile(hit)
-    gain = config_number(next(c for c in pf.config["channels"] if c.get("name") == "P_dP")
-                         ["diff_gain"], key="diff_gain", channel="P_dP")
-    bad = bad_buffer_mask(pf, "P")
-    start, n = pf.bad_buffer_report["confirmed"]["P_dP"]["spans"][0]
-    run = np.flatnonzero(bad)
-    assert run[0] <= start and run[-1] + 1 >= start + n + round(3 * gain * pf.fs_slow) - 1
-    assert not bad_buffer_mask(pf, "JAC_T").any()
-
-
 # ---------------------------------- #249: each channel's own span in the record
 def _dead_t2(tmp_path):
     """Two beads, four files; T2 on the ADC rail through the last file (as SUNRISE 2021
@@ -391,22 +373,65 @@ def _dead_t2(tmp_path):
     return probes, run_calibration(probes, ref, cfg, tmp_path, make_figure=False)
 
 
+def test_a_live_bead_without_reference_is_still_in_service(tmp_path):
+    """The span is when the bead was ALIVE (the PI's decision, 2026-10-29), not the
+    files that gave it pairs: here the reference stops before the last file."""
+    probes, ref, _truth = _dep()
+    keep = ref.time < probes[-1].time[0]
+    ref.time, ref.value, ref.pressure = ref.time[keep], ref.value[keep], ref.pressure[keep]
+    c = run_calibration(probes, ref, _cfg(), tmp_path, make_figure=False)["channels"]["T1"]
+    s = c["span"]
+    assert s["n_files"] == 4 and s["time_end"] == float(probes[-1].time[-1])
+    assert s["last_kept_pair"] < float(probes[-1].time[0])  # the calibration's support
+
+
+def test_the_alive_rule_is_fp07_pairs_dead_bead():
+    """A window is dead when its counts do not move or touch the ADC rail; a file is
+    dead when at least half its windows are (fp07_bead_tau.DEAD_FILE_FRAC), or when
+    it spans less than ~10 mK: a test probe reading its T_0 with electronics noise."""
+    from odas_tpw.fp07cal.logr import log_r
+    from odas_tpw.fp07cal.series import ALIVE_MIN_RANGE_L, ALIVE_WINDOW_S, thermistor_alive
+
+    probes, _ref, _truth = _dep()
+    p = probes[0]
+    c, br, fs = p.counts["T1"], p.bridge["T1"], p.fs
+    assert thermistor_alive(c, br, fs)
+    assert not thermistor_alive(np.full(c.size, c[0]), br, fs)  # one value
+    assert not thermistor_alive(np.full(c.size, 32767.0), br, fs)  # on the rail
+    assert not thermistor_alive(np.full(c.size, np.nan), br, fs)  # nothing recorded
+    # A test probe: SN465's read 16.145 degC with 0.15-0.22 mK of noise (0.6-1.0 mK
+    # 1-99%), about a tenth of a count; the bound is 4e-4 in L, ~10 mK.
+    rng = np.random.default_rng(1)
+    probe = c[0] + rng.normal(0.0, 0.1, c.size)
+    L = log_r(probe, br)[0]
+    assert np.ptp(np.percentile(L, [1, 99])) < ALIVE_MIN_RANGE_L
+    assert not thermistor_alive(probe, br, fs)
+    w = round(ALIVE_WINDOW_S * fs)
+    n_win = -(-c.size // w)
+    half = np.array(c, copy=True)
+    half[: (n_win // 2) * w] = c[0]  # dead in the first half of its windows (rounded down)
+    assert thermistor_alive(half, br, fs) == (n_win // 2 < 0.5 * n_win)
+    half[: (n_win // 2 + 1) * w] = c[0]
+    assert not thermistor_alive(half, br, fs)
+
+
 def _utc(t: float) -> str:
     from datetime import UTC, datetime
 
     return datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def test_each_channel_records_the_files_it_was_fitted_from(tmp_path):
+def test_each_channel_records_when_its_bead_was_alive(tmp_path):
     probes, res = _dead_t2(tmp_path)
     assert res["schema"] == "fp07-cal/2"
     t1, t2 = res["channels"]["T1"], res["channels"]["T2"]
     assert t1["span"]["n_files"] == 4 and t2["span"]["n_files"] == 3
+    assert t1["span"]["n_files_dead"] == 0 and t2["span"]["n_files_dead"] == 1
     assert t1["span"]["time_start"] == t2["span"]["time_start"] == res["time_start"]
     assert t1["span"]["time_end"] == res["time_end"] == float(probes[3].time[-1])
     assert t2["span"]["time_end"] == float(probes[2].time[-1]) < res["time_end"]
     for s in (t1["span"], t2["span"]):
-        assert s["time_start"] <= s["first_pair"] < s["last_pair"] <= s["time_end"]
+        assert s["time_start"] <= s["first_kept_pair"] < s["last_kept_pair"] <= s["time_end"]
     validate_record(res)
 
 
@@ -441,3 +466,57 @@ def test_registry_add_gives_a_bead_its_own_span(tmp_path):
     bad["channels"]["T2"]["span"]["n_files"] = 0
     with pytest.raises(registry.RegistryError, match="n_files"):
         add(bad, "T2")
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_fit_takes_the_span_from_every_file_not_the_subsample(stream, tmp_path, monkeypatch):
+    """The fit holds a subsample; its stride can end a dying bead's span a file early.
+    Here it holds files 0 and 1 of 4, and T2 dies in file 3: the streaming pass over
+    every file finds T2's pairs through file 2."""
+    import odas_tpw.fp07cal.cli as cli
+
+    probes, ref, _truth = make_deployment(SynthConfig(
+        n_yos=12, yo_seconds=1200.0, fs=4.0, ct_every_n=1, files_per_deployment=4))
+    probes[-1].counts["T2"] = np.full(probes[-1].counts["T2"].size, 32767.0)
+    paths = [tmp_path / p.label for p in probes]
+    monkeypatch.setattr(cli, "_gather_paths", lambda cfg: paths)
+    monkeypatch.setattr(cli, "_load_reference", lambda cfg: ref)
+    monkeypatch.setattr(cli, "_load_some", lambda paths, limit, kw=None: (probes[:2], 0))
+    monkeypatch.setattr(cli, "_stream", lambda paths, kw, failures=None: iter(probes))
+    cfg = tmp_path / "fp07-cal.yaml"
+    cfg.write_text(
+        "files: {output_dir: '<CONFIG_DIR>/out', max_fit_files: 2}\n"
+        "channels: [T1, T2]\n"
+        "pairs: {max_gap: 30.0}\nlag: {max_lag: 6.0, step: 0.5}\n"
+        "fit: {order: 1, geometry: false}\nstability: {n_blocks: 2}\n", encoding="utf-8")
+    argv = ["fit", "-c", str(cfg), "--no-figure"] + ([] if stream else ["--no-stream"])
+    assert cli.main(argv) == 0
+    rec = json.loads((tmp_path / "out" / "coefficients.json").read_text(encoding="utf-8"))
+    s1, s2 = rec["channels"]["T1"]["span"], rec["channels"]["T2"]["span"]
+    if stream:
+        assert s1["from"] == s2["from"] == "every file"
+        assert s1["n_files"] == 4 and s1["time_end"] == float(probes[3].time[-1])
+        assert s2["n_files"] == 3 and s2["time_end"] == float(probes[2].time[-1])
+        assert "spans" not in rec["per_profile"]
+    else:
+        assert s2["from"] == "2 fit files of 4"
+        assert s2["n_files"] == 2 and s2["time_end"] == float(probes[1].time[-1])
+
+
+def test_the_reference_recipe_masks_pressure_with_its_partner(tmp_path):
+    """Runbook section 8 blanks P where P_dP dropped out too, over the deconvolution's
+    3 diff_gain, as chi masks it; a clean channel gets an all-False mask."""
+    from odas_tpw.fp07cal.series import bad_buffer_mask
+    from odas_tpw.rsi.channels import config_number
+
+    hit = tmp_path / "pdp.p"
+    hit.write_bytes(_sentinels(VMP_P.read_bytes(), "P_dP", 200))
+    with pytest.warns(UserWarning, match="bad-buffer markers"):
+        pf = PFile(hit)
+    gain = config_number(next(c for c in pf.config["channels"] if c.get("name") == "P_dP")
+                         ["diff_gain"], key="diff_gain", channel="P_dP")
+    bad = bad_buffer_mask(pf, "P")
+    start, n = pf.bad_buffer_report["confirmed"]["P_dP"]["spans"][0]
+    run = np.flatnonzero(bad)
+    assert run[0] <= start and run[-1] + 1 >= start + n + round(3 * gain * pf.fs_slow) - 1
+    assert not bad_buffer_mask(pf, "JAC_T").any()
