@@ -49,11 +49,13 @@ class FitResult:
     corr: float = float("nan")
     kept: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
     outlier: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
-    """Pairs the robust loop REJECTED: in the design, but beyond ``robust_sigma``.
+    """Pairs the robust loop REJECTED: beyond ``robust_sigma`` of the median residual.
 
-    Not simply ``~kept``: the joint geometry fit also leaves out pairs with no
-    reference gradient, which it never judged.  The export gate is evaluated
-    over every pair but these (issue #238).
+    Not simply ``~kept``: the joint geometry fit leaves pairs with no reference
+    gradient out of its fit set, but still judges them, by the calibration's
+    residual (issue #246), so one of them is neither kept nor an outlier when
+    it lies within the clip.  The export gate is evaluated over every pair but
+    these (issue #238).
     """
     fixed_terms: dict[str, float] | None = None
     """The ``beta`` terms when the shape was HELD FIXED and only ``t_0`` fitted.
@@ -178,11 +180,17 @@ def fit_calibration(
         if not robust:
             break
         resid = y - _design(u, d_order) @ coeffs_u
-        mad = float(np.median(np.abs(resid[keep] - np.median(resid[keep]))))
+        middle = float(np.median(resid[keep]))
+        mad = float(np.median(np.abs(resid[keep] - middle)))
         sigma = 1.4826 * mad
         if sigma <= 0 or not np.isfinite(sigma):
             break
-        new_keep = np.abs(resid) <= robust_sigma * sigma
+        # About the median, the center sigma is measured from, not about zero
+        # (issue #246). Least squares puts zero at the MEAN residual, which a
+        # minority offset by many sigma drags off the majority: every pair then
+        # lay beyond 4 sigma of zero, nothing was rejected, and the channel was
+        # refused at the 1 K gate instead of flagging the minority.
+        new_keep = np.abs(resid - middle) <= robust_sigma * sigma
         if new_keep.sum() < n_poly + 1 or np.array_equal(new_keep, keep):
             break
         keep = new_keep

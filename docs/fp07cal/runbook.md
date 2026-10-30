@@ -77,14 +77,32 @@ Writes `coefficients.json`, a per-channel `*_report.md`, and diagnostics PNGs.
   is judged over the pairs the fit used: pairs its robust loop already
   rejected as outliers are reported in a `WARNING` (count, worst error, time,
   pressure, file) and in the record's `outliers_beyond_gate`, but no longer
-  refuse the fit. Nor do they set the fitted range (the report's "do NOT
+  refuse the fit. The loop judges each residual about the median of the pairs
+  it keeps, so a minority population (part of the reference a few K off, say)
+  is rejected whole instead of dragging the fit off the majority (issue #246).
+  It is rejected whole whatever its offset, 50 mK as well as 5 K, and is then
+  left out of the stability blocks too, so a `WARNING` and the record's
+  `robust_rejection` say when the loop rejected a population rather than a
+  tail: more than 15% of the pairs, or at least half of the rejections in
+  profiles that each lost more than half their pairs, when those hold at least
+  0.5% of the pairs (11 real deployments: at most 7.5%, 12.7% and 0.44%). Look
+  at those times before trusting the fit or its stability. With the geometry
+  term the loop also judges the pairs it cannot fit for want of a reference
+  gradient (profile ends, short profiles), by the calibration's residual, so a
+  population is flagged there too. Nor do rejected pairs set the fitted range (the report's "do NOT
   extrapolate" line, the record's `T_range`, `patch`'s extrapolation warning)
   or the warm/cold folds that choose the order: pairs every order rejects are
   left out of those. A fit that is not an FP07 curve is refused with
   `error: "not an FP07 curve"`: typically water with too little temperature
   range, where a fit to noise can take either sign (an isothermal synthetic
-  gave β₁ = −1.06×10⁵). A `fit.prior` block (§5) lends such a deployment the
-  bead's shape.
+  gave β₁ = −1.06×10⁵). The same refusal, with `beta_range_K` in the record,
+  meets a curve of the right sign whose slope no FP07 has: a local beta
+  (`1/(d(1/T_K)/dL)`, the slope with the `T_K²` every thermistor shares
+  divided out) outside 2723-3416 K anywhere over the fitted range. Every
+  calibration in the sheet lies within 2995-3105 K (`prior.FP07_BETA_K`; a
+  test fails if one leaves it), and the bound adds 10% each way; isothermal
+  noise fits of the right sign came out 14-42 times an FP07's (issue #247). A
+  `fit.prior` block (§5) lends such a deployment the bead's shape.
 - **`## Notes` in the report.** A requested geometry term that could not be
   fitted (no profile spans the ~30 dbar the reference gradient needs; the fit
   is then made without it, and the record has `geometry_skipped`), and
@@ -269,7 +287,32 @@ fp07-cal registry add fp07cal/coefficients.json --channel T1 \
 
 It builds the entry from `coefficients.json` and the block table of
 `<ch>_report.md` beside it, and takes from the options only what the record
-cannot supply. It adds the entry to the YAML as text, leaving every existing
+cannot supply. The entry's `first`, `last` and `fit.n_files` are the
+time the bead was ALIVE (issue #249): the record (`schema: fp07-cal/2`)
+carries a `span` per exported channel, the files of the run in which its
+thermistor recorded live data, from the first sample of the first to the last
+of the last. A file is dead for a bead when half or more of its 4 s windows
+have counts that do not move or touch the ADC rail (fp07-pair's dead-bead
+rule, with `clipped_counts`), or when the whole file spans less than ~10 mK
+(a test probe reading its `T_0`). `fp07-cal fit` judges every file of the run
+in its streaming pass; with `--no-stream` on a `max_fit_files` subsample the
+span's `from` says so, and `registry add` warns that a dying bead's end can be
+a file stride off. A bead that died before the run ended gets its own end:
+SUNRISE 2021 Pelican's T1593, on the ADC rail through SR1P_516, ends
+2021-06-28T02:58:43Z in 11 files, not at the run's 2021-06-29T10:33Z in 12.
+`first_kept_pair`/`last_kept_pair` are the extent of the pairs the fit kept,
+the calibration's support, which can be much shorter (a glider with CT on
+some yos). A bead that died is dead even where later files pass the rule now
+and then (a failing bead swinging between the rail and nonsense): the span ends
+at the last live file before the first 3 consecutive dead files, `first_dead`
+records when, and `fit` and `registry add` print a NOTE naming how many later
+files still passed (unscreened osu685 2023 T2245: 77 of 483 after it died on
+2023-06-12). One or two dead files between live ones do not end it. A failing
+bead's last few files before that can still pass, so screen them out
+(`files.exclude`) when the end matters. An
+`fp07-cal/1` record (before #249) has only the run's span; it is still read,
+by `patch` too, and `registry add` takes the run's span and file count from it
+and says so. It adds the entry to the YAML as text, leaving every existing
 line and comment untouched, then validates the whole sheet and re-renders the
 `.md` and `.csv`. `--dry-run` prints the entry and writes nothing. It refuses:
 
@@ -321,7 +364,13 @@ same slow clock as the thermistors. The same commands apply, with a reference
 built from the instrument's own samples and a few settings changed.
 
 **The reference.** Every n-th slow sample of `JAC_T` and `P`, on the
-instrument's own time stamps. A subset is fine; nothing may be interpolated:
+instrument's own time stamps. A subset is fine; nothing may be interpolated,
+so samples PFile reports as bad buffers (or rebuilt after a framing repair)
+are blanked, and the NaN drops them. `bad_buffer_mask` is chi's mask, as
+`fp07-cal` uses it for the thermistors: `P` with its pre-emphasised `P_dP`
+folded in and widened over the deconvolution's 3 `diff_gain`. A marker run on
+`P` or `P_dP` moves the deconvolved `P` over the whole file, as on a
+thermistor (issue #259), so `smeared_file_wide` drops that file's `P` whole:
 
 ```python
 from pathlib import Path
@@ -329,15 +378,24 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from odas_tpw.fp07cal.series import bad_buffer_mask, smeared_file_wide
 from odas_tpw.rsi.p_file import PFile
 
 t, T, P = [], [], []
 for path in sorted(Path("VMP").glob("*.p")):
     pf = PFile(path)
     ts = pf.start_time.timestamp() + np.asarray(pf.t_slow, dtype=np.float64)
+
+    def real(name):
+        x = np.asarray(pf.channels[name], dtype=np.float64)[: ts.size].copy()
+        x[bad_buffer_mask(pf, name)[: ts.size]] = np.nan  # not measurements
+        if smeared_file_wide(pf, name):  # a marker run, through the deconvolution
+            x[:] = np.nan
+        return x[::8]
+
     t.append(ts[::8])
-    T.append(np.asarray(pf.channels["JAC_T"], dtype=np.float64)[: ts.size][::8])
-    P.append(np.asarray(pf.channels["P"], dtype=np.float64)[: ts.size][::8])
+    T.append(real("JAC_T"))
+    P.append(real("P"))
 ds = xr.Dataset({"JAC_T": ("obs", np.concatenate(T)), "P": ("obs", np.concatenate(P))},
                 coords={"time": ("obs", np.concatenate(t))})
 ds["time"].attrs["units"] = "seconds since 1970-01-01"
@@ -430,6 +488,27 @@ What then differs from a glider:
   pair is averaged over a shorter window than the rest. Before issue #238 one
   NaN turned the rest of the file to NaN. The report's Notes and the record's
   `thermistor_gaps` say what was lost.
+- **Bad-buffer thermistor counts are blanked, not paired** (issue #248).
+  PFile reports RDL bad-buffer runs and the record slots a framing repair
+  rebuilt by interpolation, and leaves the values in place; `fp07-cal` sets
+  those thermistor counts to NaN, so the gap path above drops every pair they
+  touch. The mask is chi's per-thermistor one (`T1` and `T1_dT1`, widened over
+  the 3 `diff_gain` the deconvolution smears a dropout forward), without the
+  pressure channels, which do not enter a pair's value. The report's Notes,
+  the record's `bad_buffer_samples` and the streaming pass's `per_profile`
+  count them. On ARCTERX-2022 Wake, whose ARC1A046 has one rebuilt record,
+  250 and 244 counts were blanked and the fit is the same to round-off: the
+  slot lies before the first descent. A rebuilt slot stays local because
+  PFile interpolates it BEFORE deconvolving; an RDL marker run (the -32753
+  sentinel, left in place) on `T1` or `T1_dT1` instead moves the
+  deconvolution's two whole-file regressions (issue #259): 64 sentinels
+  injected into SN479_0006 moved `T1` by -8..+57 mK (in `T1_dT1`) and
+  -234..-64 mK (in `T1`) more than 20 s away, linearly in T. So that channel
+  is left out of that file whole (`bad_buffer_dropped`; the record's
+  `n_files_dropped`/`files_dropped`). None of 2248 glider and ARCTERX-2022
+  Wake files has such a run (osu685 2023 has U_EM runs in 22). A v6.0 file
+  flags bad records in header word 16 instead, which PFile only warns about
+  and does not report: those records are still paired.
 - **The T1 − T2 check uses this run's fitted coefficients**, one set per
   channel. Each file's embedded set was used before, and where files had been
   patched one by one those differ by several K at fixed L, so `T1 − T2`

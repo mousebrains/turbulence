@@ -330,13 +330,70 @@ def is_ntc(fit: FitResult, n: int = 201) -> bool:
     """Does T fall as L rises (and ``1/T_K`` stay positive) over the fit's own L range?
 
     Necessary, not sufficient: a fit to isothermal noise can have the right sign
-    and a slope 20x too steep or too shallow (see :func:`plausibility`).
+    and a slope 20x too steep or too shallow (see :func:`plausibility` and
+    :func:`fp07_slope`).
     """
     lo, hi = fit.L_range
     if not (np.isfinite(lo) and np.isfinite(hi)):
         return False
     inv, s = _inv_and_dTdL(fit.coeffs, np.linspace(lo, hi, n))
     return bool(np.all(inv > 0) and np.all(s < 0))
+
+
+FP07_BETA_K = (2995.0, 3105.0)
+"""[K] The local beta of every calibration in the FP07 sheet, over its own fitted range.
+
+The local beta is ``1 / (d(1/T_K)/dL)``: ``dT/dL = -T_K**2 / beta``, so it is
+the slope with the ``T_K**2`` every thermistor shares divided out, and it barely
+moves with temperature.  ``microstructure_sensors/fp07_calibrations.yaml`` at
+issue #247: 23 calibrations of 12 beads (VMP SN194 and SN142, MicroRider SN433
+and SN435; 2019-2025; 3.5-32.1 degC) span 2995.3 K (T2813, ARCTERX-2025
+Interior) to 3104.0 K (T2244, ARCTERX-2023 Interior), 3.6% apart.
+
+A constant, not read from the sheet at run time: a fit with no ``fit.prior``
+block has no sheet, which lives in the repository and not in the installed
+package.  ``tests/test_fp07cal_qc.py`` checks it against the sheet, so a
+calibration outside it fails a test and the bound is widened on purpose.
+"""
+
+BETA_MARGIN = 1.10
+"""How far outside :data:`FP07_BETA_K` a fit's local beta may go (a factor, both ways).
+
+The 10% the prior's check allows one bead (:data:`MAX_SLOPE_RATIO`), here
+around every bead the sheet holds: about 3x the sheet's whole spread.  Fits to
+isothermal noise that pass the NTC check come out 14-42x (a synthetic, 18 of 40
+seeds) and the #241 synthetic 22x.
+"""
+
+
+def fp07_slope(fit: FitResult, n: int = 201) -> tuple[bool, str, list[float]]:
+    """Is the fit's slope one an FP07 has, over its own L range?  Needs no prior.
+
+    Its local beta (see :data:`FP07_BETA_K`) must stay within
+    ``FP07_BETA_K[0] / BETA_MARGIN .. FP07_BETA_K[1] * BETA_MARGIN``
+    everywhere in the range.  Necessary, like :func:`is_ntc`: it cannot tell
+    one FP07 from another, which is what a prior is for (:func:`plausibility`).
+    Returns ``(ok, why not, [min, max] local beta)``.
+    """
+    lo, hi = fit.L_range
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        return False, "it has no L range", [float("nan")] * 2
+    L = np.linspace(lo, hi, n)
+    d_inv = sum(i * a * L ** (i - 1) for i, a in enumerate(fit.coeffs) if i)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        beta = 1.0 / np.asarray(d_inv, dtype=np.float64)
+    span = ([float(np.min(beta)), float(np.max(beta))] if np.all(np.isfinite(beta))
+            else [float("nan")] * 2)
+    allowed = (FP07_BETA_K[0] / BETA_MARGIN, FP07_BETA_K[1] * BETA_MARGIN)
+    if np.isfinite(span[0]) and allowed[0] <= span[0] and span[1] <= allowed[1]:
+        return True, "", span
+    return False, (
+        f"its local beta 1/(d(1/T_K)/dL) is {span[0]:.4g}-{span[1]:.4g} K over its own L "
+        f"range, outside the {allowed[0]:.0f}-{allowed[1]:.0f} K an FP07 may have (every "
+        f"calibration in the FP07 sheet is within {FP07_BETA_K[0]:.0f}-{FP07_BETA_K[1]:.0f} K): "
+        f"a slope no FP07 has, typically a fit to noise in water with too little "
+        f"temperature range"
+    ), span
 
 
 def plausibility(fit: FitResult, prior_poly: np.ndarray, n: int = 201

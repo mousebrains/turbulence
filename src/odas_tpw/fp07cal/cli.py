@@ -22,8 +22,10 @@ from odas_tpw._version_info import add_version_argument, software_version
 from odas_tpw.fp07cal.fit import fit_calibration, outlier_screen, select_order
 from odas_tpw.fp07cal.lag import LagResult, pressure_offset, shares_clock, temperature_lag
 from odas_tpw.fp07cal.pairs import SETTLE_TAUS, PairConfig, build_pairs_multi
+from odas_tpw.fp07cal.patch import SCHEMA as RECORD_SCHEMA
 from odas_tpw.fp07cal.prior import (
     PriorError,
+    fp07_slope,
     is_ntc,
     load_sheet,
     no_prior_record,
@@ -32,7 +34,7 @@ from odas_tpw.fp07cal.prior import (
 )
 from odas_tpw.fp07cal.prior import choose as choose_with_prior
 from odas_tpw.fp07cal.report import coverage_text, figure, fit_text
-from odas_tpw.fp07cal.series import load_hotel_reference, load_probe_series
+from odas_tpw.fp07cal.series import DEATH_RUN_FILES, load_hotel_reference, load_probe_series
 from odas_tpw.fp07cal.stability import blocked_offsets, drift_fit, t1_t2_series
 
 # Hard export gate [K]: the largest error the fitted calibration may make
@@ -449,6 +451,79 @@ def _gap_note(s: dict) -> str:
     )
 
 
+def _iso(t: float) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(t, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _channel_span(probes, pairs, fit, ch: str) -> dict:
+    """When this channel's bead was ALIVE, over the files in memory (issue #249).
+
+    The time a bead was in service, not the files that happened to give it a
+    calibration pair (the PI's decision, 2026-10-29): ``time_start``/``time_end``
+    run from the first sample of the first file in which its thermistor recorded
+    live data (:func:`~odas_tpw.fp07cal.series.thermistor_alive`) to the last
+    sample of the last, ``n_files`` counts those files and ``n_files_dead`` the
+    others.  A bead that died before the run ended gets its own end: SUNRISE
+    2021 Pelican's T1593, on the ADC rail through SR1P_516, ends with SR1P_515;
+    one that died and then passes now and then ends at its death
+    (:func:`~odas_tpw.fp07cal.series.alive_span`, ``first_dead``).
+    ``first_kept_pair``/``last_kept_pair`` are the extent of the pairs the fit
+    kept, on the reference's clock: the calibration's support.
+
+    ``from``: ``fit files``.  ``fp07-cal fit`` replaces the file span with the
+    streaming pass's over every file of the run (:func:`_cmd_fit`): the fit holds
+    a subsample, whose stride can end a dying bead a file early.
+    """
+    from odas_tpw.fp07cal.series import alive_span, bead_alive
+
+    held = [p for p in probes if ch in p.counts]
+    kept = fit.kept if fit.kept.size == len(pairs) else np.ones(len(pairs), dtype=bool)
+    span = alive_span([(float(p.time[0]), float(p.time[-1]), bead_alive(p, ch)) for p in held])
+    if span is None:  # no live file judged, yet pairs kept: their files
+        used = set(np.asarray(pairs.file_label, dtype=object)[kept].tolist())
+        span = alive_span([(float(p.time[0]), float(p.time[-1]), p.label in used)
+                           for p in held])
+    t = np.asarray(pairs.time, dtype=np.float64)[kept]
+    return {
+        **(span or {}),
+        "from": "fit files",
+        "first_kept_pair": float(t.min()),
+        "last_kept_pair": float(t.max()),
+    }
+
+
+def _death_note(ch: str, span: dict) -> str | None:
+    """The NOTE for files that still passed the alive rule after the bead died."""
+    if not span.get("n_files_alive_after_death"):
+        return None
+    return (f"{ch}: the bead died at {_iso(span['first_dead'])} (the first of "
+            f"{DEATH_RUN_FILES} consecutive dead files), yet {span['n_files_alive_after_death']} "
+            f"of the {span['n_files_after_death']} file(s) from then on still pass the alive "
+            f"rule: its span ends at {_iso(span['time_end'])}. Check those files: a bead "
+            f"failing intermittently, or one replaced without a config update.")
+
+
+def _bad_buffer_note(s: dict) -> str:
+    whole = ""
+    if s.get("n_files_dropped"):
+        whole = (
+            f" In {s['n_files_dropped']} of those file(s) an RDL marker run fell on this "
+            f"thermistor or its pre-emphasised partner, which PFile's deconvolution smears "
+            f"over the whole file (issue #259), so the channel was left out of each such "
+            f"file whole: {', '.join(s['files_dropped'])}."
+        )
+    return (
+        f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were set to NaN, "
+        f"not paired: samples PFile reports as RDL bad buffers or as record slots a framing "
+        f"repair rebuilt (PFile.bad_buffer_report), with the deconvolution's local smear "
+        f"after them, as chi masks them (issue #248).{whole} The pairs they cost are "
+        f"counted under `thermistor_gap`. A v6.0 file's records flagged in header word 16 "
+        f"are not in that report and are still paired."
+    )
+
+
 def _outliers_beyond_gate(pairs, pred_err: np.ndarray, outlier: np.ndarray) -> dict | None:
     """The pairs the robust fit rejected that the export gate would have refused on."""
     big = outlier & np.isfinite(pred_err) & (pred_err > MAX_PREDICTION_ERROR_K)
@@ -475,6 +550,88 @@ def _outlier_warning(b: dict) -> str:
         f"at {when}, {b['worst_pressure_dbar']:.1f} dbar ({b['worst_file']}). They are "
         f"left out of the fit and of the export gate; check the reference there (a spike or "
         f"an instrument-wide transient)"
+    )
+
+
+# When the robust loop rejects a second POPULATION rather than a tail (issue
+# #246). Judged about the median, it takes any minority offset by more than
+# 4 sigma out whole, however small the offset: 40% of a reference 50 mK off is
+# left out of the fit AND of the stability blocks, where before it was averaged
+# in (rms 24 mK) and its step showed in the block table. Measured on 11 real
+# deployments (7 VMP, 4 glider; 30 fitted channels with their variants):
+# 0.1-6.9% of the pairs rejected, and the profiles that lost more than half
+# their pairs (0-7 of them) held at most 12.7% of the rejections. A synthetic
+# minority of 5-40% put 83-100% of the rejections in such profiles.
+MAX_REJECTED_FRACTION = 0.15
+"""Warn when the robust fit rejects more than this fraction of the pairs it judged."""
+WHOLE_PROFILE_SHARE = 0.5
+"""... or when profiles that lost more than half their pairs hold at least this share."""
+WHOLE_PROFILE_MIN_FRACTION = 0.005
+"""... and at least this fraction of every pair judged: one rejected pair in a one-pair
+profile is not a population. (Real data: at most 0.43%, in one profile.)"""
+
+
+def _robust_rejection(pairs, fit) -> dict:
+    """What the robust fit rejected, and how much of it came as whole profiles."""
+    outlier = (fit.outlier if fit.outlier.size == len(pairs)
+               else np.zeros(len(pairs), dtype=bool))
+    kept = fit.kept if fit.kept.size == len(pairs) else ~outlier
+    # Every pair the loop judged: the joint fit judges pairs it does not fit.
+    judged = kept | outlier | (
+        np.isfinite(np.asarray(pairs.L, dtype=np.float64))
+        & np.isfinite(np.asarray(pairs.T_ref, dtype=np.float64))
+        & np.isfinite(np.asarray(pairs.w, dtype=np.float64))
+    )
+    uid = np.asarray(pairs.profile_uid, dtype=object)
+    u, inv = np.unique(uid[judged], return_inverse=True)
+    n_prof = np.bincount(inv, minlength=u.size)
+    n_rej = np.bincount(inv, weights=outlier[judged].astype(np.float64), minlength=u.size)
+    mostly = n_rej > 0.5 * n_prof
+    whole = np.zeros(len(pairs), dtype=bool)
+    whole[np.flatnonzero(judged)[mostly[inv]]] = True
+    files: dict[str, int] = {}
+    for f in np.asarray(pairs.file_label, dtype=object)[outlier]:
+        files[str(f)] = files.get(str(f), 0) + 1
+    n = int(outlier.sum())
+    t = np.asarray(pairs.time, dtype=np.float64)
+    return {
+        "n_rejected": n,
+        "n_judged": int(judged.sum()),
+        "fraction": float(n / max(1, int(judged.sum()))),
+        "n_profiles": int(u.size),
+        "n_profiles_mostly_rejected": int(mostly.sum()),
+        "share_in_those_profiles": float(n_rej[mostly].sum() / n) if n else 0.0,
+        "whole_profile_fraction": float(n_rej[mostly].sum() / max(1, int(judged.sum()))),
+        "first": float(t[whole].min()) if whole.any() else None,
+        "last": float(t[whole].max()) if whole.any() else None,
+        "files": dict(sorted(files.items(), key=lambda kv: -kv[1])[:5]),
+    }
+
+
+def _population_warning(rr: dict) -> str | None:
+    """The WARNING for a rejected population, or None for an ordinary tail."""
+    if not (rr["fraction"] > MAX_REJECTED_FRACTION
+            or (rr["n_profiles_mostly_rejected"]
+                and rr["share_in_those_profiles"] >= WHOLE_PROFILE_SHARE
+                and rr["whole_profile_fraction"] >= WHOLE_PROFILE_MIN_FRACTION)):
+        return None
+    from datetime import UTC, datetime
+
+    def iso(x: float) -> str:
+        return datetime.fromtimestamp(x, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    where = ""
+    if rr["first"] is not None:
+        where = (f", {rr['n_profiles_mostly_rejected']} of {rr['n_profiles']} profiles "
+                 f"lost more than half their pairs ({100 * rr['share_in_those_profiles']:.0f}% "
+                 f"of the rejections, {iso(rr['first'])} .. {iso(rr['last'])})")
+    return (
+        f"the robust fit rejected {rr['n_rejected']} of {rr['n_judged']} pairs "
+        f"({100 * rr['fraction']:.1f}%){where}, most in "
+        + ", ".join(f"{k} ({v})" for k, v in rr["files"].items())
+        + ". That is a second population, not a tail: a reference or bead episode that "
+        "is left out of the fit and of the stability blocks, so neither shows it. "
+        "Check those pairs before trusting either"
     )
 
 
@@ -523,7 +680,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
     clock = (po.lag, po.score)
     print(f"  {po.summary()}")
     results: dict = {
-        "schema": "fp07-cal/1",
+        "schema": RECORD_SCHEMA,
         "software_version": software_version(),
         "clock_offset_s": clock[0],
         "clock_offset_r": clock[1],
@@ -554,6 +711,21 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
 
         notes: list[str] = []
         extra: dict = {}
+        blanked = {p.label: n for p in probes
+                   if (n := int((getattr(p, "bad_buffer", None) or {}).get(ch, 0)))}
+        if blanked:
+            whole = sorted(p.label for p in probes
+                           if ch in (getattr(p, "bad_buffer_dropped", None) or []))
+            extra["bad_buffer_samples"] = {
+                "n_samples": sum(blanked.values()),
+                "n_files": len(blanked),
+                "files": sorted(blanked)[:20],
+                # left out whole: a marker run smears the deconvolution file-wide
+                **({"n_files_dropped": len(whole), "files_dropped": whole[:20]}
+                   if whole else {}),
+            }
+            notes.append(_bad_buffer_note(extra["bad_buffer_samples"]))
+            print(f"  {ch}: NOTE {notes[-1]}")
         if pairs.gaps:
             extra["thermistor_gaps"] = _gap_summary(pairs)
             notes.append(_gap_note(extra["thermistor_gaps"]))
@@ -711,6 +883,13 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         # own fitted range, is a fit to noise (water with no temperature range)
         # and predicts its pairs within the 1 K gate all the same: without a
         # prior, an isothermal synthetic exported beta_1 = -1.06e5 (issue #238).
+        #
+        # Nor, with the right sign, is a slope no FP07 has (issue #247): over
+        # isothermal water 18 of 40 synthetic noise fits came out NTC with a
+        # local beta 14-42x an FP07's. Judged against every bead in the
+        # calibration sheet, so it needs no prior (prior.FP07_BETA_K).
+        why = ""
+        beta_span = None
         if not is_ntc(fit):
             lo, hi = fit.L_range
             why = (
@@ -719,6 +898,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 f"typically water with too little temperature range, where a fit to "
                 f"noise can take either sign"
             )
+        else:
+            slope_ok, slope_why, beta_span = fp07_slope(fit)
+            if not slope_ok:
+                why = slope_why
+        if why:
             print(f"  {ch}: REFUSED — {why}. No coefficients are exported for this "
                   f"channel; a fit.prior block lends such a deployment the bead's shape.",
                   file=sys.stderr)
@@ -729,6 +913,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "refused_coefficients": fit.coeffs.tolist(),
                 "L_range": list(fit.L_range),
                 "T_range": list(fit.T_range),
+                **({"beta_range_K": beta_span} if beta_span is not None else {}),
             }
             if prior_rec is not None:
                 results["channels"][ch]["prior"] = prior_rec
@@ -738,6 +923,16 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             extra["outliers_beyond_gate"] = beyond
             warnings.append(_outlier_warning(beyond))
             print(f"  {ch}: WARNING {_outlier_warning(beyond)}", file=sys.stderr)
+        rr = _robust_rejection(pairs, fit)
+        print(f"  {ch}: robust fit rejected {rr['n_rejected']} of {rr['n_judged']} pairs "
+              f"({100 * rr['fraction']:.2f}%); {rr['n_profiles_mostly_rejected']} of "
+              f"{rr['n_profiles']} profiles lost more than half, holding "
+              f"{100 * rr['share_in_those_profiles']:.1f}% of the rejections")
+        population = _population_warning(rr)
+        if population is not None:
+            extra["robust_rejection"] = rr
+            warnings.append(population)
+            print(f"  {ch}: WARNING {population}", file=sys.stderr)
 
         blocks = blocked_offsets(
             pairs, fit,
@@ -748,6 +943,11 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         )
         stab = drift_fit(blocks)
         stab.channel = ch
+        own = _channel_span(probes, pairs, fit, ch)
+        if own.get("n_files_dead") or own.get("first_dead") is not None:
+            print(f"  {ch}: the bead was alive in {own['n_files']} of {len(probes)} file(s), "
+                  f"{_iso(own['time_start'])} .. {_iso(own['time_end'])}: its span for the "
+                  f"sheet, not the run's")
         reported[ch] = {"pairs": pairs, "fit": fit, "stab": stab, "prior": prior_rec,
                         "notes": notes, "warnings": warnings}
 
@@ -765,6 +965,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
             ),
             "n_pairs": len(pairs),
             "n_profiles": pairs.n_profiles(),
+            "span": own,
             "order": fit.order,
             "order_selection": {str(k): v for k, v in order_scores.items()},
             "coefficients": fit.coeffs.tolist(),
@@ -987,9 +1188,22 @@ def _cmd_fit(args) -> int:
         print(f"streaming all {len(paths)} files for per-profile statistics...")
         res["per_profile"] = _stream_stats(paths, ref, cfg, res, out_dir)
         _record_validity(res)
-        (out_dir / "coefficients.json").write_text(
-            json.dumps(res, indent=2, default=float), encoding="utf-8"
-        )
+        # Each channel's alive span over every file of the run (issue #249);
+        # the kept-pair extent stays the fit's own.
+        for ch, s in res["per_profile"].pop("spans", {}).items():
+            if "span" in res["channels"].get(ch, {}):
+                res["channels"][ch]["span"].update(s)
+                note = _death_note(ch, s)
+                if note:
+                    print(f"  NOTE {note}", file=sys.stderr)
+    else:
+        for e in res["channels"].values():
+            if "span" in e:
+                e["span"]["from"] = ("every file" if len(paths) <= limit else
+                                     f"{len(probes)} fit files of {len(paths)}")
+    (out_dir / "coefficients.json").write_text(
+        json.dumps(res, indent=2, default=float), encoding="utf-8"
+    )
     print(f"wrote {out_dir}/")
     return 0
 
@@ -1032,6 +1246,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     from odas_tpw.fp07cal.geometry import local_dTdz
     from odas_tpw.fp07cal.logr import temperature
     from odas_tpw.fp07cal.pairs import build_pairs
+    from odas_tpw.fp07cal.series import alive_span, bead_alive
     from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block
 
     pc = _pair_config(cfg)
@@ -1058,6 +1273,9 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             geometry[ch] = (dz, tau if np.isfinite(tau) else 0.0)
 
     recs: dict[str, list] = {ch: [] for ch in model}
+    blanked: dict[str, int] = {ch: 0 for ch in model}
+    dropped: dict[str, int] = {ch: 0 for ch in model}
+    lives: dict[str, list] = {ch: [] for ch in model}
     n_files = 0
     failures: list[tuple[str, str]] = []
     for probe in _stream(paths, _profile_kwargs(cfg), failures):
@@ -1065,8 +1283,15 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         for ch, (coeffs, lag) in model.items():
             if ch not in probe.counts:
                 continue
+            blanked[ch] += int((getattr(probe, "bad_buffer", None) or {}).get(ch, 0))
+            dropped[ch] += ch in (getattr(probe, "bad_buffer_dropped", None) or [])
+            # When the bead was alive, over EVERY file of the run, not the fit's
+            # subsample, whose stride can end a dying bead a file early (#249).
+            t = getattr(probe, "time", None)
+            if t is not None and len(t):
+                lives[ch].append((float(t[0]), float(t[-1]), bead_alive(probe, ch)))
             ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
-            if len(ps) < 100:
+            if not len(ps):
                 continue
             T_cal = np.asarray(ps.T_ref, dtype=np.float64)
             if ch in geometry:
@@ -1089,6 +1314,8 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             # gate is not water the coefficients were asked to describe.
             with np.errstate(invalid="ignore"):
                 cover = np.abs(resid) <= MAX_PREDICTION_ERROR_K
+            if len(ps) < 100:
+                continue
             uid = np.asarray(ps.profile_uid, dtype=object)
             for u in np.unique(uid):
                 sel = uid == u
@@ -1115,6 +1342,8 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         "n_files_streamed": n_files,
         "n_files_failed": len(failures),
         "channels": {},
+        "spans": {ch: {**s, "from": "every file"}
+                  for ch, s in ((c, alive_span(v)) for c, v in lives.items()) if s},
     }
     for ch, R in recs.items():
         if not R:
@@ -1177,6 +1406,11 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         }
         np.savez_compressed(out_dir / f"{ch}_profiles.npz",
                             t=t, a0=a0, resid=resid, T=Tm)
+    for ch, n in blanked.items():  # thermistor counts set NaN as bad buffers (#248)
+        if n and ch in out["channels"]:
+            out["channels"][ch]["bad_buffer_samples"] = n
+            if dropped[ch]:
+                out["channels"][ch]["bad_buffer_files_dropped"] = dropped[ch]
     return out
 
 
@@ -1497,6 +1731,20 @@ def _cmd_registry_add(args) -> int:
         print(f"refusing: {exc}", file=sys.stderr)
         return 1
     print(block, end="")
+    span = (record["channels"].get(args.channel) or {}).get("span")
+    if span is None:
+        print(f"NOTE {rec_path.name} is {record.get('schema')}, from before per-channel spans: "
+              f"first, last and n_files are the run's. If this bead stopped giving pairs "
+              f"before the run ended, correct them (issue #249).", file=sys.stderr)
+    else:
+        if span.get("from", "every file") != "every file":
+            print(f"NOTE {args.channel}'s span comes from {span['from']}, not every file: "
+                  f"first and last can be a file stride early or late, and n_files counts "
+                  f"only those. `fp07-cal fit` without --no-stream measures it over every "
+                  f"file.", file=sys.stderr)
+        note = _death_note(args.channel, span)
+        if note:
+            print(f"NOTE {note}", file=sys.stderr)
     if args.dry_run:
         print(f"(dry run: valid against {path}; nothing written)")
     else:
