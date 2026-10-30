@@ -362,7 +362,9 @@ instrument's own time stamps. A subset is fine; nothing may be interpolated,
 so samples PFile reports as bad buffers (or rebuilt after a framing repair)
 are blanked, and the NaN drops them. `bad_buffer_mask` is chi's mask, as
 `fp07-cal` uses it for the thermistors: `P` with its pre-emphasised `P_dP`
-folded in and widened over the deconvolution's 3 `diff_gain`:
+folded in and widened over the deconvolution's 3 `diff_gain`. A marker run on
+`P` or `P_dP` moves the deconvolved `P` over the whole file, as on a
+thermistor (issue #259), so `smeared_file_wide` drops that file's `P` whole:
 
 ```python
 from pathlib import Path
@@ -370,7 +372,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from odas_tpw.fp07cal.series import bad_buffer_mask
+from odas_tpw.fp07cal.series import bad_buffer_mask, smeared_file_wide
 from odas_tpw.rsi.p_file import PFile
 
 t, T, P = [], [], []
@@ -381,6 +383,8 @@ for path in sorted(Path("VMP").glob("*.p")):
     def real(name):
         x = np.asarray(pf.channels[name], dtype=np.float64)[: ts.size].copy()
         x[bad_buffer_mask(pf, name)[: ts.size]] = np.nan  # not measurements
+        if smeared_file_wide(pf, name):  # a marker run, through the deconvolution
+            x[:] = np.nan
         return x[::8]
 
     t.append(ts[::8])

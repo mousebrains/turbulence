@@ -533,3 +533,9 @@ def test_the_reference_recipe_masks_pressure_with_its_partner(tmp_path):
     run = np.flatnonzero(bad)
     assert run[0] <= start and run[-1] + 1 >= start + n + round(3 * gain * pf.fs_slow) - 1
     assert not bad_buffer_mask(pf, "JAC_T").any()
+    # ...and the marker run moves the deconvolved P over the whole file: the recipe
+    # drops that file's P (not JAC_T, which is not deconvolved).
+    from odas_tpw.fp07cal.series import smeared_file_wide
+
+    assert smeared_file_wide(pf, "P") and not smeared_file_wide(pf, "JAC_T")
+    assert not smeared_file_wide(PFile(VMP_P), "P")

@@ -432,7 +432,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   same pairs and the same curve to 1e-8 mK. The runbook's VMP reference
   recipe (§8) blanks `JAC_T` and `P` the same way, through
   `fp07cal.series.bad_buffer_mask`, which folds `P_dP`'s dilated mask into
-  `P`'s as chi does. A rebuilt record slot stays local because PFile
+  `P`'s as chi does, and drops a file's `P` whole when a marker run on `P` or
+  `P_dP` smears its deconvolution (`fp07cal.series.smeared_file_wide`). A rebuilt record slot stays local because PFile
   interpolates it before deconvolving; an RDL marker run (the sentinel, left
   in place) on a thermistor or its pre-emphasised partner moves the
   deconvolution's two whole-file regressions (issue #259, PFile's to fix): 64

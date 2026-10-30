@@ -340,7 +340,7 @@ def load_probe_series(
     (:func:`odas_tpw.rsi.bad_buffer.probe_masks` on the channel's own
     ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's local
     smear).  A marker run on a deconvolved thermistor moves the whole file
-    (:func:`_smeared_file_wide`), so that channel is blanked in full and named
+    (:func:`smeared_file_wide`), so that channel is blanked in full and named
     in ``bad_buffer_dropped``.  ``bad_buffer`` counts what was blanked, per
     channel.  A v6.0 file's records flagged in header word 16 are not in the
     report (PFile only warns), so they are not blanked.
@@ -385,7 +385,7 @@ def load_probe_series(
         # for a marker run below still had a live bead in it.
         alive[name] = thermistor_alive(counts[name], bridge[name], fs)
         bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
-        if bad is not None and _smeared_file_wide(pf, name):
+        if bad is not None and smeared_file_wide(pf, name):
             bad = np.ones(n, dtype=bool)
             dropped.append(name)
         if bad is not None:
@@ -571,9 +571,11 @@ def _bad_buffer_mask(
     return bad if bad.any() else None
 
 
-def _smeared_file_wide(pf: Any, name: str) -> bool:
-    """Does an RDL marker run reach thermistor *name* through its deconvolution?
+def smeared_file_wide(pf: Any, name: str) -> bool:
+    """Does an RDL marker run reach channel *name* through its deconvolution?
 
+    A thermistor (``T1`` with ``T1_dT1``), or ``P`` with ``P_dP`` for a
+    reference built from the instrument's own channels (runbook section 8).
     PFile leaves a marker (the -32753 sentinel) in place and deconvolves
     ``T1`` from ``T1`` and ``T1_dT1`` with two regressions over the WHOLE
     file, which one such run moves: 64 sentinels injected into SN479_0006
