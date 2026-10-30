@@ -251,6 +251,16 @@ which has not been run. The configs that disagree with a now-held sheet:
   of the discounted 2024-07-15 sheets. Rockland gives 0.1093 / 0.1189, so ε is
   **1.10× high (sh1) and 1.30× high (sh2)**. MR SN 433's M3036 0.1223 and
   M3037 0.0952 are their 2024-07-15 sheets, which stand.
+  The sleeves of both probes are printed with 0.1041, so the same value
+  recurs wherever they flew:
+  - RIOT 2026 shakedown, MR SN 435, both probes: 457 files, 03-17 to 03-30.
+  - RIOT 2026 IOP, VMP SN 412, sh1 M3038: 9 files, 08-21 to 08-24.
+  - A 10-file copy of ARCTERX-2025 data (2025-04-04/05) under
+    `Rockland-2025/SL685`.
+
+  Rockland's values were given for ARCTERX-2025 Interior. Whether the
+  2024-07-09 calibrations also govern 2026, by then 20+ months old, or a later
+  calibration exists, is still to be asked.
 
 ## Next request (not yet sent)
 
@@ -271,3 +281,6 @@ which has not been run. The configs that disagree with a now-held sheet:
 5. ~~**M3038 2024-07-15**~~ — answered 2026-10-30: MR SN 435 used M3038 0.1093
    and M3039 0.1189 (the 2024-07-09 calibrations); both 2024-07-15 sheets are
    discounted (README, *Known bad sheets*).
+6. **M3038 / M3039 after 2024-07** — any calibration before their RIOT 2026
+   use (MR SN 435 in March, VMP SN 412 in August), all configured with the
+   sleeves' 0.1041.
