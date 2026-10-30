@@ -468,9 +468,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   bad-buffer blanking. `fp07-cal fit` measures it over EVERY file of the run in
   its streaming pass, not the `max_fit_files` subsample, whose stride could
   end a dying bead a file early; with `--no-stream` on a subsample `from`
-  says so and `registry add` prints a NOTE. `first_kept_pair`/
-  `last_kept_pair` keep the extent of the pairs the fit kept, the
-  calibration's support. Nothing else in the record changed: `patch` and
+  says so and `registry add` prints a NOTE. A bead that died is dead even
+  where later files pass the rule now and then: the span ends at the last
+  live file before the first run of 3 consecutive dead files
+  (`series.DEATH_RUN_FILES`; one or two dead files between live ones are a
+  glitch, and none of the deployments here has such a gap), and the record
+  keeps `first_dead` and how many of the files after it still passed
+  (`n_files_alive_after_death` of `n_files_after_death`), which `fit` and
+  `registry add` print as a NOTE. Unscreened osu685 2023's T2245 died at
+  A685_0158 (2023-06-12T17:17Z), yet 77 of the 483 files after it pass the
+  rule, scattered between dead runs of up to 222; its span now ends with
+  A685_0157 (2023-06-12T15:03:12Z, the screened entry's end) where it had
+  run to 2023-08-07. `first_kept_pair`/`last_kept_pair` keep the extent of
+  the pairs the fit kept, the calibration's support. Nothing else in the
+  record changed: `patch` and
   `registry add` still read an `fp07-cal/1` record, and `registry add` takes
   the run's span from it, as before, with a NOTE. Refitting SUNRISE 2021
   Pelican's first 12 files and adding T2 reproduces #243's corrected entry:
@@ -482,7 +493,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   2025-02-04T00:42:20Z .. 02-10T02:54:58Z in 119 files (sheet: 01:06:01 ..
   01:21:19, 45) and osu685 2025 2025-02-04T01:19:54Z .. 04-10T22:50:50Z in
   797 (sheet: 07:42:26 .. 15:36:58, 103): the sheet's glider entries carry
-  the fitted subsample's span and count.
+  the fitted subsample's span and count. None of these beads died within its
+  run (unscreened osu685 2023 T1, whose failed files follow file 0618, ends
+  2023-08-06T10:41:14Z, 14 h after its screened entry: files 0619-0622 and
+  0624 still pass the rule).
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

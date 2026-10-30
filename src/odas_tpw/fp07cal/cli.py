@@ -34,7 +34,7 @@ from odas_tpw.fp07cal.prior import (
 )
 from odas_tpw.fp07cal.prior import choose as choose_with_prior
 from odas_tpw.fp07cal.report import coverage_text, figure, fit_text
-from odas_tpw.fp07cal.series import load_hotel_reference, load_probe_series
+from odas_tpw.fp07cal.series import DEATH_RUN_FILES, load_hotel_reference, load_probe_series
 from odas_tpw.fp07cal.stability import blocked_offsets, drift_fit, t1_t2_series
 
 # Hard export gate [K]: the largest error the fitted calibration may make
@@ -466,7 +466,9 @@ def _channel_span(probes, pairs, fit, ch: str) -> dict:
     live data (:func:`~odas_tpw.fp07cal.series.thermistor_alive`) to the last
     sample of the last, ``n_files`` counts those files and ``n_files_dead`` the
     others.  A bead that died before the run ended gets its own end: SUNRISE
-    2021 Pelican's T1593, on the ADC rail through SR1P_516, ends with SR1P_515.
+    2021 Pelican's T1593, on the ADC rail through SR1P_516, ends with SR1P_515;
+    one that died and then passes now and then ends at its death
+    (:func:`~odas_tpw.fp07cal.series.alive_span`, ``first_dead``).
     ``first_kept_pair``/``last_kept_pair`` are the extent of the pairs the fit
     kept, on the reference's clock: the calibration's support.
 
@@ -474,24 +476,33 @@ def _channel_span(probes, pairs, fit, ch: str) -> dict:
     streaming pass's over every file of the run (:func:`_cmd_fit`): the fit holds
     a subsample, whose stride can end a dying bead a file early.
     """
-    from odas_tpw.fp07cal.series import bead_alive
+    from odas_tpw.fp07cal.series import alive_span, bead_alive
 
     held = [p for p in probes if ch in p.counts]
-    alive = [p for p in held if bead_alive(p, ch)]
     kept = fit.kept if fit.kept.size == len(pairs) else np.ones(len(pairs), dtype=bool)
-    if not alive:  # no live file judged, yet pairs kept: their files
+    span = alive_span([(float(p.time[0]), float(p.time[-1]), bead_alive(p, ch)) for p in held])
+    if span is None:  # no live file judged, yet pairs kept: their files
         used = set(np.asarray(pairs.file_label, dtype=object)[kept].tolist())
-        alive = [p for p in held if p.label in used]
+        span = alive_span([(float(p.time[0]), float(p.time[-1]), p.label in used)
+                           for p in held])
     t = np.asarray(pairs.time, dtype=np.float64)[kept]
     return {
-        "time_start": float(min(p.time[0] for p in alive)),
-        "time_end": float(max(p.time[-1] for p in alive)),
-        "n_files": len(alive),
-        "n_files_dead": len(held) - len(alive),
+        **(span or {}),
         "from": "fit files",
         "first_kept_pair": float(t.min()),
         "last_kept_pair": float(t.max()),
     }
+
+
+def _death_note(ch: str, span: dict) -> str | None:
+    """The NOTE for files that still passed the alive rule after the bead died."""
+    if not span.get("n_files_alive_after_death"):
+        return None
+    return (f"{ch}: the bead died at {_iso(span['first_dead'])} (the first of "
+            f"{DEATH_RUN_FILES} consecutive dead files), yet {span['n_files_alive_after_death']} "
+            f"of the {span['n_files_after_death']} file(s) from then on still pass the alive "
+            f"rule: its span ends at {_iso(span['time_end'])}. Check those files: a bead "
+            f"failing intermittently, or one replaced without a config update.")
 
 
 def _bad_buffer_note(s: dict) -> str:
@@ -933,7 +944,7 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
         stab = drift_fit(blocks)
         stab.channel = ch
         own = _channel_span(probes, pairs, fit, ch)
-        if own["n_files_dead"]:
+        if own.get("n_files_dead") or own.get("first_dead") is not None:
             print(f"  {ch}: the bead was alive in {own['n_files']} of {len(probes)} file(s), "
                   f"{_iso(own['time_start'])} .. {_iso(own['time_end'])}: its span for the "
                   f"sheet, not the run's")
@@ -1182,6 +1193,9 @@ def _cmd_fit(args) -> int:
         for ch, s in res["per_profile"].pop("spans", {}).items():
             if "span" in res["channels"].get(ch, {}):
                 res["channels"][ch]["span"].update(s)
+                note = _death_note(ch, s)
+                if note:
+                    print(f"  NOTE {note}", file=sys.stderr)
     else:
         for e in res["channels"].values():
             if "span" in e:
@@ -1232,7 +1246,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     from odas_tpw.fp07cal.geometry import local_dTdz
     from odas_tpw.fp07cal.logr import temperature
     from odas_tpw.fp07cal.pairs import build_pairs
-    from odas_tpw.fp07cal.series import bead_alive
+    from odas_tpw.fp07cal.series import alive_span, bead_alive
     from odas_tpw.fp07cal.stability import SECONDS_PER_DAY, Block
 
     pc = _pair_config(cfg)
@@ -1261,7 +1275,7 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
     recs: dict[str, list] = {ch: [] for ch in model}
     blanked: dict[str, int] = {ch: 0 for ch in model}
     dropped: dict[str, int] = {ch: 0 for ch in model}
-    spans: dict[str, dict] = {}
+    lives: dict[str, list] = {ch: [] for ch in model}
     n_files = 0
     failures: list[tuple[str, str]] = []
     for probe in _stream(paths, _profile_kwargs(cfg), failures):
@@ -1273,14 +1287,9 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
             dropped[ch] += ch in (getattr(probe, "bad_buffer_dropped", None) or [])
             # When the bead was alive, over EVERY file of the run, not the fit's
             # subsample, whose stride can end a dying bead a file early (#249).
-            s = spans.setdefault(ch, {"time_start": np.inf, "time_end": -np.inf,
-                                      "n_files": 0, "n_files_dead": 0})
-            if bead_alive(probe, ch):
-                s["time_start"] = min(s["time_start"], float(probe.time[0]))
-                s["time_end"] = max(s["time_end"], float(probe.time[-1]))
-                s["n_files"] += 1
-            else:
-                s["n_files_dead"] += 1
+            t = getattr(probe, "time", None)
+            if t is not None and len(t):
+                lives[ch].append((float(t[0]), float(t[-1]), bead_alive(probe, ch)))
             ps = build_pairs(probe, ref, ch, lag=lag, cfg=pc)
             if not len(ps):
                 continue
@@ -1333,7 +1342,8 @@ def _stream_stats(paths, ref, cfg: dict, res: dict, out_dir: Path) -> dict:
         "n_files_streamed": n_files,
         "n_files_failed": len(failures),
         "channels": {},
-        "spans": {ch: {**s, "from": "every file"} for ch, s in spans.items() if s["n_files"]},
+        "spans": {ch: {**s, "from": "every file"}
+                  for ch, s in ((c, alive_span(v)) for c, v in lives.items()) if s},
     }
     for ch, R in recs.items():
         if not R:
@@ -1726,11 +1736,15 @@ def _cmd_registry_add(args) -> int:
         print(f"NOTE {rec_path.name} is {record.get('schema')}, from before per-channel spans: "
               f"first, last and n_files are the run's. If this bead stopped giving pairs "
               f"before the run ended, correct them (issue #249).", file=sys.stderr)
-    elif span.get("from", "every file") != "every file":
-        print(f"NOTE {args.channel}'s span comes from {span['from']}, not every file: first "
-              f"and last can be a file stride early or late, and n_files counts only those. "
-              f"`fp07-cal fit` without --no-stream measures it over every file.",
-              file=sys.stderr)
+    else:
+        if span.get("from", "every file") != "every file":
+            print(f"NOTE {args.channel}'s span comes from {span['from']}, not every file: "
+                  f"first and last can be a file stride early or late, and n_files counts "
+                  f"only those. `fp07-cal fit` without --no-stream measures it over every "
+                  f"file.", file=sys.stderr)
+        note = _death_note(args.channel, span)
+        if note:
+            print(f"NOTE {note}", file=sys.stderr)
     if args.dry_run:
         print(f"(dry run: valid against {path}; nothing written)")
     else:

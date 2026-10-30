@@ -302,8 +302,14 @@ SUNRISE 2021 Pelican's T1593, on the ADC rail through SR1P_516, ends
 2021-06-28T02:58:43Z in 11 files, not at the run's 2021-06-29T10:33Z in 12.
 `first_kept_pair`/`last_kept_pair` are the extent of the pairs the fit kept,
 the calibration's support, which can be much shorter (a glider with CT on
-some yos). A bead swinging between the rail and nonsense in fewer than half
-its windows still counts as alive: screen such files out (`files.exclude`). An
+some yos). A bead that died is dead even where later files pass the rule now
+and then (a failing bead swinging between the rail and nonsense): the span ends
+at the last live file before the first 3 consecutive dead files, `first_dead`
+records when, and `fit` and `registry add` print a NOTE naming how many later
+files still passed (unscreened osu685 2023 T2245: 77 of 483 after it died on
+2023-06-12). One or two dead files between live ones do not end it. A failing
+bead's last few files before that can still pass, so screen them out
+(`files.exclude`) when the end matters. An
 `fp07-cal/1` record (before #249) has only the run's span; it is still read,
 by `patch` too, and `registry add` takes the run's span and file count from it
 and says so. It adds the entry to the YAML as text, leaving every existing

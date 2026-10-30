@@ -506,16 +506,68 @@ def thermistor_alive(counts: np.ndarray, bridge: BridgeParams, fs: float) -> boo
 def bead_alive(probe: ProbeSeries, channel: str) -> bool:
     """:attr:`ProbeSeries.alive` for *channel*, or judged on the counts the series holds.
 
+    As the loader judges, on the counts as recorded: a channel left out of the file
+    whole for a marker run (``bad_buffer_dropped``) had live counts before they were
+    blanked, so it is alive; locally blanked windows are simply not judged.
     Duck-typed series lacking what it needs are not judged alive.
     """
     alive = getattr(probe, "alive", None) or {}
     if channel in alive:
         return bool(alive[channel])
+    if channel in (getattr(probe, "bad_buffer_dropped", None) or []):
+        return True
     counts = getattr(probe, "counts", None) or {}
     bridge = getattr(probe, "bridge", None) or {}
     if counts.get(channel) is None or channel not in bridge:
         return False
     return thermistor_alive(counts[channel], bridge[channel], probe.fs)
+
+
+DEATH_RUN_FILES = 3
+"""Consecutive dead files, after the bead has lived, that end its span (issue #249).
+
+A bead that died and then passes the alive rule now and then is dead: osu685's
+T2245 (ARCTERX-2023, unscreened) died at A685_0158, 2023-06-12, and 77 of its 483
+later files still pass it, scattered between dead runs of up to 222.  One or two
+dead files between live ones are tolerated as a glitch; no deployment here has one
+inside a live period (osu684 2023/2025, osu685 2023/2025, SUNRISE 2021 Pelican),
+and osu685 2023 T1's one isolated dead file opens its death (16 dead files follow
+the next live one), so 2 or 3 end every span here alike."""
+
+
+def alive_span(files: list[tuple[float, float, bool]]) -> dict | None:
+    """When a bead was alive, from ``(time_start, time_end, alive)`` per file of a run.
+
+    The span runs from the first live file to the last live file before the bead's
+    death: the first run of :data:`DEATH_RUN_FILES` consecutive dead files after it
+    first lived.  ``n_files`` counts the live files in it and ``n_files_dead`` the dead
+    ones before the death.  ``first_dead`` is the death's start (None when the bead
+    never died within the run), and ``n_files_alive_after_death`` the files that still
+    passed the alive rule after it, of ``n_files_after_death``.  None when no file
+    was alive.
+    """
+    rows = sorted(files, key=lambda r: r[0])
+    live = [i for i, r in enumerate(rows) if r[2]]
+    if not live:
+        return None
+    death, run = None, 0
+    for i in range(live[0], len(rows)):
+        run = 0 if rows[i][2] else run + 1
+        if run == DEATH_RUN_FILES:
+            death = i - DEATH_RUN_FILES + 1
+            break
+    upto = rows[:death] if death is not None else rows
+    alive = [r for r in upto if r[2]]
+    after = rows[death:] if death is not None else []
+    return {
+        "time_start": float(alive[0][0]),
+        "time_end": float(alive[-1][1]),
+        "n_files": len(alive),
+        "n_files_dead": len(upto) - len(alive),
+        "first_dead": None if death is None else float(rows[death][0]),
+        "n_files_after_death": len(after),
+        "n_files_alive_after_death": sum(1 for r in after if r[2]),
+    }
 
 
 def bad_buffer_mask(pf: Any, name: str) -> np.ndarray:

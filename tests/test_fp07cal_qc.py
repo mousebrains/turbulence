@@ -351,6 +351,7 @@ def test_a_marker_run_on_a_deconvolved_thermistor_drops_it_from_the_file(
         hit = load_probe_series(hit_path, profiles=[], speed_var=None)
     assert name in PFile(hit_path).bad_buffer_report["confirmed"]
     assert hit.bad_buffer_dropped == ["T1"]
+    assert hit.alive["T1"]  # judged on the counts as recorded, before the drop
     assert np.isnan(hit.counts["T1"]).all() and hit.bad_buffer["T1"] == hit.time.size
     np.testing.assert_array_equal(hit.counts["T2"], clean.counts["T2"])  # its own pair
 
@@ -361,14 +362,19 @@ def test_a_rebuilt_record_stays_local(sn479):
 
 
 def test_a_dropped_file_is_named_in_the_record_and_report(tmp_path):
+    """As load_probe_series leaves it: blanked whole, but judged alive before that."""
+    from odas_tpw.fp07cal.series import bead_alive
+
     probes, ref, _truth = _dep()
     p = probes[1]
     p.counts["T1"] = np.full(p.time.size, np.nan)
     p.bad_buffer, p.bad_buffer_dropped = {"T1": p.time.size}, ["T1"]
+    assert bead_alive(p, "T1")  # a hand-built series: the fallback agrees with the loader
+    p.alive = {"T1": True}
     c = run_calibration(probes, ref, _cfg(), tmp_path, make_figure=False)["channels"]["T1"]
     b = c["bad_buffer_samples"]
     assert b["n_files_dropped"] == 1 and b["files_dropped"] == [p.label]
-    assert c["span"]["n_files"] == len(probes) - 1
+    assert c["span"]["n_files"] == len(probes)  # the bead was alive through it
     report = (tmp_path / "T1_report.md").read_text(encoding="utf-8")
     assert "left out of each such file whole" in report and "header word 16" in report
 
@@ -412,6 +418,11 @@ def test_the_alive_rule_is_fp07_pairs_dead_bead():
     assert not thermistor_alive(np.full(c.size, c[0]), br, fs)  # one value
     assert not thermistor_alive(np.full(c.size, 32767.0), br, fs)  # on the rail
     assert not thermistor_alive(np.full(c.size, np.nan), br, fs)  # nothing recorded
+    # One sample on the rail in every window is enough: a live bead never goes there.
+    w = round(ALIVE_WINDOW_S * fs)
+    touched = np.array(c, copy=True)
+    touched[::w] = 32767.0
+    assert not thermistor_alive(touched, br, fs)
     # A test probe: SN465's read 16.145 degC with 0.15-0.22 mK of noise (0.6-1.0 mK
     # 1-99%), about a tenth of a count; the bound is 4e-4 in L, ~10 mK.
     rng = np.random.default_rng(1)
@@ -426,6 +437,78 @@ def test_the_alive_rule_is_fp07_pairs_dead_bead():
     assert thermistor_alive(half, br, fs) == (n_win // 2 < 0.5 * n_win)
     half[: (n_win // 2 + 1) * w] = c[0]
     assert not thermistor_alive(half, br, fs)
+
+
+def test_a_bead_that_died_is_dead_though_some_later_files_pass():
+    """The span ends at the last live file before DEATH_RUN_FILES dead ones in a row;
+    one or two dead files between live ones do not end it (issue #249 review)."""
+    from odas_tpw.fp07cal.series import DEATH_RUN_FILES, alive_span
+
+    assert DEATH_RUN_FILES == 3
+
+    def files(flags):
+        return [(10.0 * i, 10.0 * i + 9.0, f == "A") for i, f in enumerate(flags)]
+
+    s = alive_span(files("..AAA.AA..AAAA...A.A..."))
+    assert s["time_start"] == 20.0 and s["time_end"] == 139.0  # last A before "..."
+    assert s["n_files"] == 9 and s["n_files_dead"] == 5  # the 2 leading, 1 and 2 inside
+    assert s["first_dead"] == 140.0
+    assert s["n_files_after_death"] == 9 and s["n_files_alive_after_death"] == 2
+    whole = alive_span(files("AAA.AA..AAA.."))  # no death: dead runs of 1, 2 and a tail of 2
+    assert whole["first_dead"] is None and whole["time_end"] == 109.0
+    assert whole["n_files"] == 8 and whole["n_files_after_death"] == 0
+    assert alive_span(files("....")) is None
+    # Unordered input is ordered by time.
+    assert alive_span(files("AA...A")[::-1]) == alive_span(files("AA...A"))
+
+
+def test_fit_notes_a_bead_alive_again_after_its_death(tmp_path, monkeypatch, capsys):
+    """Over every file (the streaming pass): T2 dies in file 1 of 6 and passes again in
+    file 5; the span ends with file 0, and fit and registry add say why."""
+    import odas_tpw.fp07cal.cli as cli
+
+    probes, ref, _truth = make_deployment(SynthConfig(
+        n_yos=12, yo_seconds=1200.0, fs=4.0, ct_every_n=1, files_per_deployment=6))
+    for p in probes:
+        p.instrument_sn, p.probe_sn = "7", {"T1": "T100", "T2": "T101"}
+    for p in probes[1:5]:
+        p.counts["T2"] = np.full(p.counts["T2"].size, 32767.0)
+    paths = [tmp_path / p.label for p in probes]
+    monkeypatch.setattr(cli, "_gather_paths", lambda cfg: paths)
+    monkeypatch.setattr(cli, "_load_reference", lambda cfg: ref)
+    monkeypatch.setattr(cli, "_load_some", lambda paths, limit, kw=None: (probes[::2], 0))
+    monkeypatch.setattr(cli, "_stream", lambda paths, kw, failures=None: iter(probes))
+    cfg = tmp_path / "fp07-cal.yaml"
+    cfg.write_text(
+        "files: {output_dir: '<CONFIG_DIR>/out', max_fit_files: 3}\n"
+        "channels: [T1, T2]\n"
+        "pairs: {max_gap: 30.0}\nlag: {max_lag: 6.0, step: 0.5}\n"
+        "fit: {order: auto, geometry: false}\nstability: {n_blocks: 2}\n",
+        encoding="utf-8")
+    assert cli.main(["fit", "-c", str(cfg), "--no-figure"]) == 0
+    assert "yet 1 of the 5 file(s) from then on still pass" in capsys.readouterr().err
+    rec_path = tmp_path / "out" / "coefficients.json"
+    rec = json.loads(rec_path.read_text(encoding="utf-8"))
+    s2 = rec["channels"]["T2"]["span"]
+    assert s2["n_files"] == 1 and s2["time_end"] == float(probes[0].time[-1])
+    assert s2["first_dead"] == float(probes[1].time[0])
+    assert s2["n_files_after_death"] == 5 and s2["n_files_alive_after_death"] == 1
+    assert rec["channels"]["T1"]["span"]["first_dead"] is None
+    # registry add says it too (and still adds the span through the death).
+    e = registry.entry_from_record(
+        rec, "T2", deployment="Synthetic", instrument_model="vmp-250", method="vmp-own-jac",
+        reference_kind="JAC CT", reference_serial="23", reference_cal_date="2016-02-15",
+        reference_pole_s=0.7,
+        block_offsets_K=[0.0] * rec["channels"]["T2"]["stability"]["n_blocks"])
+    assert e["last"] == _utc(probes[0].time[-1]) and e["fit"]["n_files"] == 1
+    sheet = tmp_path / registry.YAML_NAME
+    sheet.write_text(registry.default_path().read_text(encoding="utf-8"), encoding="utf-8")
+    assert cli.main(["registry", "add", str(rec_path), "--channel", "T2",
+                     "--deployment", "Synthetic", "--instrument-model", "vmp-250",
+                     "--method", "vmp-own-jac", "--reference-kind", "JAC CT",
+                     "--reference-serial", "23", "--reference-cal-date", "2016-02-15",
+                     "--reference-pole-s", "0.7", "--dry-run", "-r", str(sheet)]) == 0
+    assert "yet 1 of the 5 file(s) from then on still pass" in capsys.readouterr().err
 
 
 def _utc(t: float) -> str:
