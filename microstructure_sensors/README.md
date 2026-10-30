@@ -69,11 +69,14 @@ from the configs in two places:
 
 VMP SN 142's sh2 at ARCTERX-2025 Interior is likewise attributed by probe,
 not by config. Every config says M1218 (sens 0.0629), but the row gives
-**M1281**. A photo of the installed probes shows a sleeve labeled M1281 and
-none labeled M1218. 0.0629 is M1281's 2021-04-28 calibration (owner,
-2026-10-30), one day after the 2021-04-27 calibration of the instrument's sh1,
-M1254 (0.0739). M1218's only sheet is 0.0797 (2014). So the configured serial
-is a transposition. M1281's sheets are requested.
+**M1281**. A photo of six of the campaign's probe sleeves (owner,
+2026-10-30) shows one labeled "M1281 600BAR, 2021-04-28 S= 0.0629" and none
+labeled M1218. Beside it is "M1254 600bar, 2021-04-27 S= 0.0739", the
+instrument's sh1. M1218's only sheet is 0.0797 (2014). So the configured
+serial is a transposition, and the configured value is the M1281 sleeve's.
+The other legible sleeve labels match their configs and sheets: M2244
+2020-03-10 0.0678, and M3037 2024-07-15 0.0952. M1281's sheets are
+requested.
 
 B's FP07s stay as the placeholder `T`. The resistance evidence makes T2
 very likely T3308. T1 is T3306 or T3302, and the evidence cannot separate

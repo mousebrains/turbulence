@@ -233,8 +233,8 @@ which has not been run. The configs that disagree with a now-held sheet:
 - **VMP SN 142, ARCTERX-2025 Interior: sh2 M1218 0.0629** matches no M1218
   sheet (the only one is 2014-12-15, 0.0797). **Answered 2026-10-30: the probe
   is M1281**, and the configured serial is a transposition. A photo of the
-  installed probes shows an M1281 sleeve and no M1218, and 0.0629 is M1281's
-  2021-04-28 calibration (owner). It was ~46 months old at use, as sh1 M1254's
+  campaign's probe sleeves shows "M1281 600BAR, 2021-04-28 S= 0.0629" and no
+  M1218 (README, *sensor_deployments.csv*). It was ~46 months old at use, as sh1 M1254's
   2021-04-27 calibration was (M1254 read 0.0847 by 2026-04-28).
 - **The CASPER-East rows for M1344 / M1371 also flag**, only at their last
   date, 2016-08-08. That date comes from `CAS_170`, a stray file whose header
