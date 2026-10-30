@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from odas_tpw.chi.batchelor import KAPPA_T, batchelor_kB, kraichnan_grad
 from odas_tpw.chi.chi import (
@@ -173,6 +174,11 @@ class TestChiFromBin2FollowsTheSpectrum:
 # --- no chi path reads bin 1 ------------------------------------------------------
 
 FIELDS = ("chi", "kB", "K_max", "fom", "K_max_ratio", "var_resolved", "mad_shape")
+
+
+def _flat_e(f, W):
+    """A flat relative response e = 0.8, what an fp07-pair correction supplies."""
+    return np.full_like(np.asarray(f, dtype=float), 0.8)
 L4_FIELDS = (*FIELDS, "epsilon_T", "chi_final", "chi_qc_fallback")
 
 
@@ -262,6 +268,21 @@ class TestNoChiPathReadsBin1:
         got = _run(name, _poison(l3, 1, 1e6), l4, first_bin=1)
         assert not np.array_equal(got.chi, ref.chi, equal_nan=True)
 
+    @pytest.mark.parametrize("value", [np.nan, 1e6, 0.0])
+    def test_poisoned_bin1_changes_nothing_with_a_response_factor(self, name, value):
+        """fp07_response weights ln e by a running mean of S/N over +/-3 bins;
+        that mean must not reach back to bin 1 (it moved chi by up to ln 0.03
+        before it was limited to the usable bins)."""
+        l3, l4 = _synth_l3()
+        l3.response_factor = [_flat_e, None]
+        ref = _run(name, l3, l4)
+        got = _run(name, _poison(l3, 1, value), l4)
+        for f in L4_FIELDS:
+            np.testing.assert_array_equal(getattr(got, f), getattr(ref, f), err_msg=f)
+        # not vacuous: the factor is applied
+        plain = _run(name, *_synth_l3())
+        assert not np.array_equal(ref.chi[0], plain.chi[0], equal_nan=True)
+
 
 @pytest.mark.parametrize("value", [np.nan, 1e6])
 class TestWindowFunctionsNeverReadBin1:
@@ -332,6 +353,15 @@ _MAIN_BB459B7 = {
 }
 
 
+# The same synthetic with a flat fp07_response factor e = 0.8 on probe 0, from
+# main bb459b7: (count, sum of ln) of chi and kB.
+_MAIN_BB459B7_RESPONSE = {
+    "epsilon": {"chi": (32, -584.0345948206865), "kB": (32, 142.4536778273769)},
+    "iterative": {"chi": (32, -591.2752633663827), "kB": (32, 136.9242284701482)},
+    "mle": {"chi": (32, -588.412995303196), "kB": (32, 137.2594142191046)},
+}
+
+
 def _aggregates(res) -> dict[str, tuple[int, float]]:
     out = {}
     for f in _MAIN_BB459B7["epsilon"]:
@@ -347,6 +377,14 @@ class TestFirstBinOneReproducesMain:
         l3, l4 = _synth_l3()
         got = _aggregates(_run(name, l3, l4, first_bin=1))
         for f, (n, s) in _MAIN_BB459B7[name].items():
+            assert got[f][0] == n, f
+            assert got[f][1] == pytest.approx(s, rel=1e-12, abs=1e-12), f
+
+    def test_first_bin_1_is_main_with_a_response_factor(self, name):
+        l3, l4 = _synth_l3()
+        l3.response_factor = [_flat_e, None]
+        got = _aggregates(_run(name, l3, l4, first_bin=1))
+        for f, (n, s) in _MAIN_BB459B7_RESPONSE[name].items():
             assert got[f][0] == n, f
             assert got[f][1] == pytest.approx(s, rel=1e-12, abs=1e-12), f
 
@@ -379,6 +417,52 @@ class TestUsableBins:
         np.testing.assert_array_equal(_usable_bins(K), _usable_bins(K, FIRST_BIN))
 
 
+class TestSignalWeightedMask:
+    def test_none_is_every_bin(self):
+        from odas_tpw.chi.fp07_pair import signal_weighted
+
+        rng = np.random.default_rng(3)
+        S, N = rng.uniform(1, 30, 40), np.ones(40)
+        e = np.full(40, 0.8)
+        np.testing.assert_array_equal(signal_weighted(e, S, N),
+                                      signal_weighted(e, S, N, usable=None))
+
+    def test_masked_bins_cannot_reach_a_neighbor(self):
+        from odas_tpw.chi.fp07_pair import signal_weighted
+
+        rng = np.random.default_rng(4)
+        S, N = rng.uniform(1, 30, 40), np.ones(40)
+        e = np.full(40, 0.8)
+        usable = _usable_bins(np.arange(40.0), 2)
+        ref = signal_weighted(e, S, N, usable=usable)
+        for v in (0.0, 1e6, np.nan):
+            S2 = S.copy()
+            S2[:2] = v
+            got = signal_weighted(e, S2, N, usable=usable)
+            np.testing.assert_array_equal(got[2:], ref[2:])
+
+    def test_diag_reconstruction_follows_the_product(self):
+        """perturb-diag redraws the weighting chi used, first_bin included."""
+        from odas_tpw.chi.fp07_pair import signal_weighted
+        from odas_tpw.perturb.diag.render import _fp07_h2
+
+        rng = np.random.default_rng(5)
+        W = 0.7
+        K = np.arange(65) * 2.0 / W
+        S, N = rng.uniform(0.5, 40, K.size), np.ones(K.size)
+        f_ref = np.array([1.0, 10.0, 100.0])
+        ln_e = np.log([0.9, 0.8, 0.7])
+        attrs = {"fp07_model": "single_pole", "fp07_response_applied": 1,
+                 "fp07_response_W_ref": W, "fp07_response_tau_model": "lueck"}
+        base = _fp07_h2(K, W, attrs)
+        e_raw = _fp07_h2(K, W, attrs, response=(f_ref, ln_e)) / base
+        for fb, usable in ((None, None), (1, None), (2, _usable_bins(K, 2))):
+            a = dict(attrs) if fb is None else {**attrs, "first_bin": fb}
+            got = _fp07_h2(K, W, a, response=(f_ref, ln_e), obs=S, noise=N)
+            want = base * signal_weighted(e_raw, S, N, usable=usable)
+            np.testing.assert_allclose(got, want, rtol=1e-12)
+
+
 class TestValidateFirstBin:
     @pytest.mark.parametrize("good", [1, 2, 7, np.int64(3)])
     def test_good(self, good):
@@ -396,11 +480,49 @@ class TestValidateFirstBin:
         with pytest.raises(ValueError, match="first_bin"):
             _L4_RUNS[name](l3, l4, first_bin=0)
 
+    def test_check_first_bin_fits(self):
+        from odas_tpw.chi.chi import check_first_bin_fits
+
+        check_first_bin_fits(2, 129)  # fft 256
+        check_first_bin_fits(126, 129)  # bins 126-128: three left
+        for fb in (127, 128, 500):
+            with pytest.raises(ValueError, match=f"first_bin = {fb} leaves"):
+                check_first_bin_fits(fb, 129)
+
+    @pytest.mark.parametrize("name", sorted(_L4_RUNS))
+    def test_l4_refuses_a_first_bin_past_nyquist(self, name):
+        l3, l4 = _synth_l3(n=2)  # fft 256: bins 0-128
+        with pytest.raises(ValueError, match="first_bin = 127 leaves 2 FFT bin"):
+            _L4_RUNS[name](l3, l4, first_bin=127)
+
+    def test_a_starved_window_says_first_bin(self):
+        """Too few bins from first_bin up to K_AA is not a non-detection."""
+        l3, l4 = _synth_l3(n=1, seed=7)
+        S, K, N = l3.gradt_spec[0, :, 0], l3.kcyc[:, 0], l3.noise_spec[0, :, 0]
+        H2, tau, w = l3.H2[0, 0], float(l3.tau0[0, 0]), float(l3.pspd_rel[0])
+        f_aa = 8.5 * K[1] * w  # K_AA between bins 8 and 9: bins 1-8 in band
+        for fn, args in (
+            (_chi_from_epsilon, (S, K, float(l4.epsi_final[0]), 1.2e-6, N, H2, tau, fp07_transfer,
+                                 f_aa, w, "kraichnan", 1.4e-7)),
+            (_iterative_fit, (S, K, 1.2e-6, N, H2, tau, fp07_transfer, f_aa, w, "kraichnan",
+                              1.4e-7)),
+            (_mle_fit_kB, (S, K, 1e-8, 1.2e-6, N, H2, tau, fp07_transfer, f_aa, w, "kraichnan",
+                           1.4e-7)),
+        ):
+            # bins 4-8: 5, too few for Method 2 (6); bins 7-8: 2, too few for Method 1 (3)
+            fb = 7 if fn is _chi_from_epsilon else 4
+            with pytest.warns(UserWarning, match=f"from first_bin = {fb} up to K_AA"):
+                r = fn(*args, first_bin=fb)
+            assert np.isnan(r.chi)
+            assert np.isfinite(fn(*args, first_bin=2).chi)  # the window itself is fine
+
     def test_rsi_pipeline_refuses_bin_0(self, tmp_path):
         from odas_tpw.rsi.pipeline import run_pipeline
 
         with pytest.raises(ValueError, match="chi_first_bin"):
             run_pipeline([], tmp_path, chi_first_bin=0)
+        with pytest.raises(ValueError, match="chi_first_bin = 7 leaves 2 FFT bin"):
+            run_pipeline([], tmp_path, chi_fft_length=16, chi_first_bin=7)
 
 
 # --- config: both front ends ----------------------------------------------------------
@@ -439,12 +561,44 @@ class TestConfig:
         with pytest.raises(ValueError, match="first_bin"):
             cfg.load_config(path)
 
+    def test_too_large_for_the_fft_fails_at_load(self, front_end, tmp_path):
+        cfg = self._cfg(front_end)
+        path = tmp_path / "config.yaml"
+        path.write_text("chi:\n  fft_length: 8\n  first_bin: 3\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="first_bin = 3 leaves 2 FFT bin"):
+            cfg.load_config(path)
+
+    def test_written_config_keeps_first_bin_1(self, front_end, tmp_path):
+        """The hash leaves bin 1 out, the written config.yaml must not: there its
+        absence would read back as the default, 2."""
+        cfg = self._cfg(front_end)
+        assert "first_bin" not in cfg.canonicalize("chi", {"first_bin": 1})
+        out = cfg.write_resolved_config(tmp_path, "chi", {"first_bin": 1})
+        text = out.read_text(encoding="utf-8")
+        assert "first_bin: 1" in text
+        assert cfg.load_config(out)["chi"]["first_bin"] == 1
+        out2 = cfg.write_resolved_config(tmp_path, "chi", {})
+        assert cfg.load_config(out2)["chi"]["first_bin"] == 2
+
     @pytest.mark.parametrize("good", [1, 3])
     def test_good_value_loads(self, front_end, tmp_path, good):
         cfg = self._cfg(front_end)
         path = tmp_path / "config.yaml"
         path.write_text(f"chi:\n  first_bin: {good}\n", encoding="utf-8")
         assert cfg.load_config(path)["chi"]["first_bin"] == good
+
+
+def test_rsi_pipeline_chi_file_records_first_bin(tmp_path):
+    from odas_tpw.rsi.pipeline import _write_l4_chi
+
+    l3, l4 = _synth_l3(n=3)
+    for fb, want in ((2, 2), (5, 5), (1, None)):
+        res = _run("epsilon", l3, l4, first_bin=fb)
+        assert res.first_bin == fb
+        path = tmp_path / f"chi_{fb}.nc"
+        _write_l4_chi(res, path, "2025-01-01T00:00:00")
+        with xr.open_dataset(path) as ds:
+            assert ds.attrs.get("first_bin") == want
 
 
 def test_perturb_chi_stages_are_versioned_by_first_bin():

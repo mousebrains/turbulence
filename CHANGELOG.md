@@ -363,9 +363,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fallback, the MLE likelihood and its seed chi, the chi integral, `K_min` of
   the variance correction (which now models `[0, K_bin2]`), the iterative
   fit's `k_l = max(K[first_bin], 3 k*)`, `fom`, `mad_shape`, `var_resolved`
-  and `K_max_ratio`, on Method 1 and both Method-2 fits, in perturb,
-  `rsi-tpw chi`, `rsi-tpw pipeline` and the viewers. The stored spectra are
-  unchanged. Measured with perturb and each campaign's own configuration on
+  and `K_max_ratio`, and the S/N running mean that weights an
+  `fp07_response` factor (a +/-3-bin mean that reached bin 1 and DC; with a
+  flat e = 0.8 a poisoned bin 1 moved chi by up to ln 0.03), on Method 1 and
+  both Method-2 fits, in perturb, `rsi-tpw chi`, `rsi-tpw pipeline` and the
+  viewers. The stored spectra are unchanged. Measured with perturb and each campaign's own configuration on
   2 `.p` files per set, main vs this change (medians over probe-windows, with
   their 16-84% spread; windows of one file are not independent, so this is
   not an error bar on the set's median):
@@ -383,25 +385,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unchanged, `fom` moves by about -0.1%, and 3 of the 41,606 probe-windows
   change fom/K_max_ratio QC state. The Method-1 drop is mostly the
   low-wavenumber excess of issue #191 leaving the band, not the detrend bias
-  (which makes bin 1 read LOW):
-  the `[bin 1, bin 2]` interval held a median 29% (SUNRISE 2022), 19%
+  (which makes bin 1 read LOW): the `[bin 1, bin 2]` interval held a median 29% (SUNRISE 2022), 19%
   (SUNRISE 2019), 11% (CASPER-West), 9% (Taiwan) and 4% (ARCTERX) of the
   observed band variance against 1-3% of the Kraichnan model's, and the
-  variance correction restores only the model's share. On the glider, `kB`
-  rises by a median ln 0.014 [0, 0.059], `K_max_ratio` falls as much, and
-  more probe-windows pass the fom/K_max_ratio QC (5661 -> 5977; QC fallback
-  windows 133 -> 25); the 82 lost windows (1.3%; 29 of 3185 `chiMean`) are
-  all ones whose fitted `kB` doubled without bin 1 and crossed the existing
-  `kB > 1.5 K_AA` drop.
+  variance correction restores only the model's share. The glider numbers
+  are measured through the iterative Method-2 fit, which is ill-conditioned
+  there (a separate issue, not changed here): its 1% convergence tolerance
+  is finer than the ~1.5% step of the MLE's fine kB grid, and the variance
+  correction, hence the next iteration's chi seed, grows with kB, so `kB`
+  runs away across the three iterations; 50% of the 6314 windows end
+  unconverged with bin 1, 61% without. Through it, `kB` rises by a median
+  ln 0.014 [0, 0.059], `K_max_ratio` falls as much, and more probe-windows
+  pass the fom/K_max_ratio QC (5661 -> 5977; QC fallback windows 133 ->
+  25). The 82 lost windows (1.3%; 29 of 3185 `chiMean`) are that runaway
+  carried further (kB 1.1-98x main's, median 2x; 57 of them have two
+  likelihood minima, and 22 sat on the low-kB one with bin 1), and the
+  existing `kB > 1.5 K_AA` drop correctly removes them.
   `chi.first_bin: 1` (perturb and `rsi-tpw`; `chi_first_bin` in
   `run_pipeline`) reproduces the earlier products: on those 12 files (338
   profile products) every variable's values and every global attribute but
   the provenance stamps are identical to main's. The key is validated at
-  load (an integer >= 1), hashed into the chi, chi_binned and chi_combo stage
-  signatures and recorded in the chi file's `first_bin` attribute, except at
-  1, which is left out of both as before the key existed. Epsilon is unchanged; its
-  shear path also uses bin 1 (see `docs/chi_mathematics.md`, "Lowest usable
-  bin").
+  load (an integer >= 1 leaving at least 3 bins up to Nyquist, against an
+  explicit `fft_length`, and again when chi runs), hashed into the chi,
+  chi_binned and chi_combo stage signatures, and recorded in the chi file's
+  `first_bin` attribute (`rsi-tpw chi`, perturb and `rsi-tpw pipeline`),
+  except at 1, which is left out of both as before the key existed; the
+  written `config.yaml` keeps it either way. A window left with too few bins
+  from `first_bin` up to the anti-alias limit (while bin 1 and up would do)
+  warns naming `first_bin` instead of reporting a non-detection. Epsilon is
+  unchanged; its shear path also uses bin 1 (see `docs/chi_mathematics.md`,
+  "Lowest usable bin").
 - **`fp07-cal` on a VMP against its own JAC CT (#238).** Six defects found
   fitting VMP beads against the instrument's own reference. On three glider
   deployments (osu684 2023/2025, osu685 2025) the coefficients, chosen

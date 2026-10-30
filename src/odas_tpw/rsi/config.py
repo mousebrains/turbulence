@@ -96,7 +96,6 @@ class _RsiConfigManager(ConfigManager):
             return {
                 k: v for k, v in mapping.items()
                 if not (k in _CHI_DROP_WHEN_UNSET and v is None)
-                and not (k == "first_bin" and v == 1)
             }
         if section == "epsilon":
             # At the values that reproduce the code from before each key
@@ -104,6 +103,16 @@ class _RsiConfigManager(ConfigManager):
             inert = {"despike_half_width": 0.04, "record_locked_shear": False}
             return {k: v for k, v in mapping.items() if k not in inert or v != inert[k]}
         return mapping
+
+    def _canonicalize_section(self, section: str, params: dict) -> dict:
+        # chi.first_bin = 1 (the band from before the key existed) is left out
+        # of the HASH only, so those runs keep their output directory. It stays
+        # in the written config.yaml: there its absence would read back as the
+        # default, 2, a different band.
+        out = super()._canonicalize_section(section, params)
+        if section == "chi" and out.get("first_bin") == 1:
+            out = {k: v for k, v in out.items() if k != "first_bin"}
+        return out
 
     def validate_config(self, config: dict) -> None:
         """Unknown sections/keys, plus the epsilon despike/record-locked values.
@@ -115,11 +124,15 @@ class _RsiConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
-        first_bin = (config.get("chi") or {}).get("first_bin")
+        chi = config.get("chi") or {}
+        first_bin = chi.get("first_bin")
         if first_bin is not None:
-            from odas_tpw.chi.chi import validate_first_bin
+            from odas_tpw.chi.chi import check_first_bin_fits, validate_first_bin
 
-            validate_first_bin(first_bin, where="[chi] first_bin")
+            first_bin = validate_first_bin(first_bin, where="[chi] first_bin")
+            fft = chi.get("fft_length") or DEFAULTS["chi"]["fft_length"]
+            if isinstance(fft, int) and not isinstance(fft, bool) and fft > 0:
+                check_first_bin_fits(first_bin, fft // 2 + 1, where="[chi] first_bin")
         slow = (config.get("chi") or {}).get("fp07_slow_response")
         if slow is not None:
             from odas_tpw.chi.fp07_slow import parse_slow_response

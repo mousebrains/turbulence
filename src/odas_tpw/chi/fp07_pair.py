@@ -353,22 +353,34 @@ def select(corrections: Sequence[ResponseCorrection], instrument: str,
 # ---------------------------------------------------------------------------
 
 
-def _smoothed_snr(S: np.ndarray, N: np.ndarray, k: int = SNR_SMOOTH) -> np.ndarray:
+def _smoothed_snr(
+    S: np.ndarray, N: np.ndarray, k: int = SNR_SMOOTH, usable: np.ndarray | None = None
+) -> np.ndarray:
     """Running mean of S/N over +/- k bins along the last axis.
 
     Normalized by the number of bins actually inside the array: a zero-padded
     mean understated S/N in the first and last k bins (where the reference
-    level is taken).
+    level is taken). With *usable* (a boolean mask over the last axis) only
+    those bins enter the mean, normalized by how many of them each window
+    holds; a bin with no usable neighbor reads 0. ``None`` averages every bin.
     """
     r = np.where(N > 0, S / np.where(N > 0, N, 1.0), 0.0)
     n = r.shape[-1]
     k = max(0, min(k, (n - 1) // 2))
     ker = np.ones(2 * k + 1)
-    count = np.convolve(np.ones(n), ker, mode="same")
+    if usable is None:
+        count = np.convolve(np.ones(n), ker, mode="same")
+    else:
+        m = np.asarray(usable, dtype=bool)
+        r = np.where(m, r, 0.0)  # np.where, not r * m: a NaN outside stays out
+        count = np.convolve(m.astype(np.float64), ker, mode="same")
+        count = np.where(count > 0, count, 1.0)
     return np.apply_along_axis(lambda v: np.convolve(v, ker, mode="same") / count, -1, r)
 
 
-def signal_weighted(e: np.ndarray, S: np.ndarray, N: np.ndarray) -> np.ndarray:
+def signal_weighted(
+    e: np.ndarray, S: np.ndarray, N: np.ndarray, usable: np.ndarray | None = None
+) -> np.ndarray:
     """The factor to apply to one window's bins: e where the signal dominates.
 
     ln e is scaled by w = clip((s - APPLY_SNR_LO) / (SNR_MIN - APPLY_SNR_LO), 0, 1),
@@ -376,8 +388,15 @@ def signal_weighted(e: np.ndarray, S: np.ndarray, N: np.ndarray) -> np.ndarray:
     factor is a response property of the SIGNAL; in a noise-dominated bin the
     integrand is mostly noise-model error and clipping residual, which the
     bead's response did not shape and which must not be rescaled.
+
+    *usable* restricts that running mean to the bins chi may use
+    (``chi.chi._usable_bins``), so a bin chi never reads (bin 1, DC) cannot
+    reach a neighbor's weight; ``None`` keeps every bin, as before chi had a
+    ``first_bin``.
     """
-    s = _smoothed_snr(np.asarray(S, dtype=np.float64), np.asarray(N, dtype=np.float64))
+    s = _smoothed_snr(
+        np.asarray(S, dtype=np.float64), np.asarray(N, dtype=np.float64), usable=usable
+    )
     w = np.clip((s - APPLY_SNR_LO) / (SNR_MIN - APPLY_SNR_LO), 0.0, 1.0)
     return np.asarray(np.exp(w * np.log(e)), dtype=np.float64)
 

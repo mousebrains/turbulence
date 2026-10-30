@@ -639,11 +639,17 @@ class _PerturbConfigManager(ConfigManager):
             for key, inert in (("despike_half_width", 0.04), ("record_locked_shear", False)):
                 if key in mapping and mapping[key] == inert:
                     del mapping[key]
-        if section == "chi" and mapping.get("first_bin") == 1:
-            # Same rule: bin 1 is the band from before the key existed. The
-            # default (2) is a different band, so it changes the hash.
-            del mapping["first_bin"]
         return mapping
+
+    def _canonicalize_section(self, section: str, params: dict) -> dict:
+        # chi.first_bin = 1 is the band from before the key existed, so it is
+        # left out of the HASH (the default, 2, is a different band and changes
+        # it). Unlike the keys above it stays in the written config.yaml: its
+        # absence there would read back as 2.
+        out = super()._canonicalize_section(section, params)
+        if section == "chi" and out.get("first_bin") == 1:
+            out = {k: v for k, v in out.items() if k != "first_bin"}
+        return out
 
     def validate_config(self, config: dict) -> None:
         """Structural validation plus fs-independent window-duration checks.
@@ -724,11 +730,17 @@ class _PerturbConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
-        first_bin = (config.get("chi") or {}).get("first_bin")
+        chi = config.get("chi") or {}
+        first_bin = chi.get("first_bin")
         if first_bin is not None:
-            from odas_tpw.chi.chi import validate_first_bin
+            from odas_tpw.chi.chi import check_first_bin_fits, validate_first_bin
 
-            validate_first_bin(first_bin, where="chi.first_bin")
+            first_bin = validate_first_bin(first_bin, where="chi.first_bin")
+            # Against an explicit fft_length here; an fft_sec window is in
+            # samples only at a file's rate, so chi checks that when it runs.
+            fft = chi.get("fft_length")
+            if isinstance(fft, int) and not isinstance(fft, bool) and fft > 0:
+                check_first_bin_fits(first_bin, fft // 2 + 1, where="chi.first_bin")
         # stratification.sort / dTdz_source pick a code path by membership, so a
         # typo would otherwise fall through to a default silently.
         strat = config.get("stratification") or {}

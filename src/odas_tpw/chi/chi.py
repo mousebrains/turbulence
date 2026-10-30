@@ -307,6 +307,52 @@ def validate_first_bin(value: object, where: str = "chi.first_bin") -> int:
     return int(value)
 
 
+# The fewest bins any chi path can work with (Method 1's band, fom, the detection
+# gate); Method 2 needs 6.
+_MIN_BAND_BINS = 3
+
+
+def check_first_bin_fits(first_bin: int, n_freq: int, where: str = "chi.first_bin") -> None:
+    """ValueError when *first_bin* leaves fewer than 3 bins up to Nyquist.
+
+    *n_freq* is the one-sided grid's length, ``fft_length // 2 + 1`` (DC and
+    Nyquist included). Such a value would make every window NaN; refusing it
+    names the cause instead of a non-detection warning per window. Whether
+    enough bins remain below the anti-alias limit depends on the speed, so that
+    is reported per window (:func:`_first_bin_starves`).
+    """
+    left = int(n_freq) - int(first_bin)
+    if left < _MIN_BAND_BINS:
+        raise ValueError(
+            f"{where} = {first_bin} leaves {max(left, 0)} FFT bin(s) up to Nyquist at "
+            f"fft_length {2 * (int(n_freq) - 1)}; chi needs at least {_MIN_BAND_BINS}"
+        )
+
+
+def _first_bin_starves(K: np.ndarray, K_AA: float, first_bin: int, need: int) -> str | None:
+    """Why a window has too few bins, when *first_bin* is the reason; else None.
+
+    Fewer than *need* bins lie from bin *first_bin* up to ``K_AA`` while bin 1
+    and up would give enough. The window is NaN either way; this only makes the
+    warning name the cause. ``None`` when bin 1 and up would be too few as well
+    (the anti-alias limit's doing) and always at ``first_bin = 1``, so those
+    paths warn exactly as before.
+    """
+    if first_bin <= 1:
+        return None
+    in_aa = K <= K_AA
+    n = int(np.sum(_usable_bins(K, first_bin) & in_aa))
+    if n >= need:
+        return None
+    n1 = int(np.sum((K > 0) & in_aa))
+    if n1 < need:
+        return None
+    return (
+        f"only {n} FFT bin(s) from first_bin = {first_bin} up to K_AA = {K_AA:.3g} cpm "
+        f"({n1} from bin 1); chi needs {need}, so it is NaN"
+    )
+
+
 def _usable_bins(K: np.ndarray, first_bin: int = FIRST_BIN) -> np.ndarray:
     """Bins a chi estimate may use: positive wavenumber, at or above bin *first_bin*.
 
@@ -539,6 +585,12 @@ def _chi_from_epsilon(
     # fom ~= 1 for the noise floor itself).  Reject such windows as non-detections
     # here, at the source, so they become NaN and drop out of chiMean rather than
     # biasing its low tail and the derived mixing products.  (2026-07-03 review.)
+    # Too few bins from first_bin up is said as such, not as a non-detection
+    # (the same NaN result the gate would return).
+    starved = _first_bin_starves(K, K_AA, first_bin, _MIN_BAND_BINS)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
     if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
@@ -736,6 +788,10 @@ def _mle_fit_kB(
     # Signal-presence gate (mirrors Method 1): reject a noise-only window before
     # the MLE fits a Batchelor curve to noise and returns a spurious finite
     # chi/kB.  (2026-07-03 adversarial review of the Method-1 gate.)
+    starved = _first_bin_starves(K, f_AA / speed, first_bin, 6)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
     if _below_detection(spec_obs, noise_K, K, f_AA / speed, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
@@ -908,6 +964,10 @@ def _iterative_fit(
     # band_has_signal check (spec_obs > 1x noise), emits a spurious finite
     # chi/kB. Reject at the source -> NaN, dropping it from chiMean rather than
     # biasing the low tail.  (2026-07-03 adversarial review of the Method-1 gate.)
+    starved = _first_bin_starves(K, K_AA, first_bin, 6)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
     if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
