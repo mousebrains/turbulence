@@ -74,7 +74,10 @@ def test_attr_keys_cover_extract_therm_cal_output():
         def get(self, key, default=None):
             return 1.0
 
-    assert set(_extract_therm_cal(_AnyCfg())) == set(THERM_CAL_ATTR_KEYS)
+    # beta_3 comes only with an order-3 in-situ fit (#245), never from a config.
+    order_3 = {"t_0": 1.0, "beta_1": 1.0, "beta_2": 1.0, "beta_3": 1.0}
+    assert set(_extract_therm_cal(_AnyCfg())) == set(THERM_CAL_ATTR_KEYS) - {"beta_3"}
+    assert set(_extract_therm_cal(_AnyCfg(), order_3)) == set(THERM_CAL_ATTR_KEYS)
 
 
 class TestAttrWrite:
@@ -205,11 +208,11 @@ class TestChiParity:
     routes have five known benign divergence sources — f4 channel storage in
     the NetCDF, profile re-detection edges, recomputed speed, W1a
     full-file-vs-trimmed QC context, and perturb's fp07 in-situ recalibration
-    of the DATA. On this fixture the attrs carry the FACTORY coefficients
-    (the .p config string); perturb's fp07 in-situ calibration may rewrite
-    the channel DATA before extract_profiles runs — the attrs still describe
-    the electronics (noise floor, bilinear gain), and factory coefficients
-    beat the generic defaults either way.
+    of the DATA. On this fixture (no in-situ fit) the attrs carry the
+    embedded coefficients from the .p config string, as the .p route does.
+    Where perturb fits a bead, its T_0/beta_* attrs carry the fit instead
+    (they are the bead's R(T), not the electronics; issue #245,
+    tests/test_noise_model_insitu_coeffs.py).
 
     Discrimination check (measured on this fixture, fft_length=512): with
     the m8 attrs max |log10 ratio| ~ 6e-4; with the generic defaults
