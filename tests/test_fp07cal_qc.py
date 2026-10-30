@@ -103,6 +103,19 @@ def test_the_joint_loop_judges_the_pairs_it_does_not_fit():
     np.testing.assert_array_equal(fit.outlier[has], alone.outlier)
 
 
+def test_the_rejection_count_includes_the_pairs_the_joint_fit_does_not_fit():
+    """robust_rejection's denominator is every pair the loop judged: with the geometry
+    term, the no-gradient pairs too, which are neither kept nor (mostly) outliers."""
+    from odas_tpw.fp07cal.cli import _robust_rejection
+
+    pairs, _minority, _truth = _bimodal_pairs()
+    fit, _geo = joint_fit(pairs, order=1, dTdz=local_dTdz(pairs))
+    rr = _robust_rejection(pairs, fit)
+    assert rr["n_judged"] == len(pairs) > int((fit.kept | fit.outlier).sum())
+    assert rr["n_rejected"] == int(fit.outlier.sum())
+    assert rr["fraction"] == pytest.approx(fit.outlier.sum() / len(pairs))
+
+
 @pytest.mark.parametrize("geometry", [False, True])
 @pytest.mark.parametrize("share", [0.15, 0.30])
 def test_a_bimodal_reference_flags_the_minority_and_exports(share, geometry, tmp_path):

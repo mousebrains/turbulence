@@ -383,11 +383,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pairs it leaves out of its fit set for want of a reference gradient, by the
   calibration's residual (their geometry columns are zero): unjudged, they
   were neither kept nor outliers, the 1 K gate counted them, and the bimodal
-  synthetic was still refused through them (2.01 K, at 15% and 30%). Its fit
-  set and so every coefficient are unchanged; on the five glider fits (all
-  with geometry) those pairs now join the rejected and the fold screen, which
-  moves the chosen order's held-out score by −8.6..−0.3% (osu684 2025 T2:
-  17.5 → 16.0 mK) and no order. Unscreened osu685 2023 T1, refused at 32.7 K
+  synthetic was still refused through them (2.01 K, at 15% and 30%). That is
+  coefficient-neutral inside `joint_fit` (its fit set is unchanged), but NOT
+  end to end: the wider outlier mask feeds `outlier_screen` and so the
+  held-out folds that choose the order and weigh a prior, and the export
+  gate. On the five glider fits (all with geometry) every coefficient and
+  order is unchanged, while the recorded held-out scores move: the chosen
+  order's by −8.6..−0.3% (osu684 2025 T2: 17.52 → 16.02 mK), another order's
+  by up to +4.7% (osu685 2023 T1, order 3: 31.86 → 33.36 mK). A close call
+  between orders, or between a full fit and a prior's shape inside the 5% tie
+  band, can therefore flip. Unscreened osu685 2023 T1, refused at 32.7 K
   before, now exports with the 2248 pairs of its failed files beyond 1 K
   flagged (worst 35.4 K, A685_0620), within ±0.055 mK of the screened fit the
   sheet's T2244 entry came from; its dead T2 is still refused.
