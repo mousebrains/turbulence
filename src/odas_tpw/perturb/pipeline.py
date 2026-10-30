@@ -3315,11 +3315,13 @@ def process_file(
     -------
     dict with output paths per stage.
     """
+    from odas_tpw.fp07cal.logr import coeffs_to_config
     from odas_tpw.perturb.fp07_cal import MIN_LAG_CORR, fp07_calibrate
     from odas_tpw.perturb.qc_gate import apply_qc_to_dataset
     from odas_tpw.processing.chi_combine import mk_chi_mean
     from odas_tpw.processing.ct_align import ct_align
     from odas_tpw.processing.epsilon_combine import mk_epsilon_mean
+    from odas_tpw.rsi.chi_io import IN_SITU_COEFFS_KEY
     from odas_tpw.rsi.dissipation import _compute_epsilon
     from odas_tpw.rsi.p_file import PFile
     from odas_tpw.rsi.profile import _smooth_fall_rate, get_profiles
@@ -3662,12 +3664,30 @@ def process_file(
                     f"in-situ (Steinhart-Hart order {fp07_cfg.get('order', 2)} "
                     f"vs {fp07_cfg.get('reference', 'JAC_T')})"
                 )
+                # The fitted coefficients, in the configuration's form, go to
+                # the chi noise model with the data they converted (#245): its
+                # T_0/beta_* are the bead's R(T), and the embedded ones can be
+                # far off (SUNRISE 2021 Pelican T2: ~4.5x in the noise). They
+                # ride on the base channel's channel_info, which
+                # extract_profiles turns into the T*_dT* attrs; pf.config is
+                # left as read, so it still says what the .p file holds.
+                # Converted before anything is applied: a coefficient with no
+                # representation raises here and leaves every channel on the
+                # embedded calibration, data and noise model alike.
+                fitted = {
+                    ch: coeffs_to_config(c)
+                    for ch, c in cal_result.get("coefficients", {}).items()
+                }
                 for ch_name, cal_data in cal_result.get("channels", {}).items():
                     pf.channels[ch_name] = cal_data
                     pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
                 for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
                     pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
+                for ch_name, coeffs in fitted.items():
+                    pf.channel_info.setdefault(ch_name, {})[IN_SITU_COEFFS_KEY] = {
+                        k: float(v) for k, v in coeffs.items()
+                    }
                 # Hand the outcome to the parent: from a spawned worker, the
                 # returned dict is the only channel that reaches the run summary.
                 result["fp07"] = {

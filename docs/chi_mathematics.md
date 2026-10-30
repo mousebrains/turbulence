@@ -161,9 +161,9 @@ Verified numerically in [`tests/test_chi.py::TestKraichnanGrad::test_integral_eq
 
 ### Universal constant q
 
-- `q_K = 5.26 +/- 0.25` ([Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727), from DNS)
+- `q_K = 5.26 +/- 0.25` ([Bogucki et al. 1997](https://doi.org/10.1017/S0022112097005727), from forced, unstratified DNS)
 
-The code uses `Q_KRAICHNAN = 5.26` as default.
+The code uses `Q_KRAICHNAN = 5.26` as default. It is not a settled constant: estimates in stratified flow run 7.3-9.9 and decaying DNS gives 3.4. Nor can a temperature spectrum measure it without an independent epsilon, because the Kraichnan spectrum depends on `kB` and `q` only through `kc = kB / sqrt(6*q)`: `S(k) = chi / (6 * kappa_T * kc^2) * k * exp(-k/kc)`. The values, and what a different `q` does to each method's chi and epsilon, are in [validation_and_limitations.md](validation_and_limitations.md#the-kraichnan-constant-q-is-a-second-systematic).
 
 
 ## 4. FP07 Thermistor Transfer Function
@@ -205,6 +205,8 @@ The Goto model once omitted the `W^(-0.32)` and used a fixed 3 ms: 13% short at 
 ([`fp07.py: fp07_tau`](../src/odas_tpw/chi/fp07.py))
 
 At a typical profiling speed of `W = 0.7 m/s`, the Lueck model gives `tau_0 ~ 0.012 s`, corresponding to a half-power frequency of `f_{3dB} = 1/(2*pi*tau_0) ~ 13 Hz` or roughly `k_{3dB} ~ 19 cpm`. This means the FP07 attenuates the observed spectrum significantly in the viscous-diffusive subrange where the Batchelor spectrum rolls off — the correction for this attenuation is a central part of chi estimation.
+
+**Shear-anchored time constants are effective values.** [Goto et al. (2016)](https://doi.org/10.1175/JTECH-D-15-0220.1) chose their double-pole 3 ms by comparing temperature-derived epsilon with shear epsilon, fitting the Kraichnan spectrum at `q_K = 5.26`. [Ijichi & St. Laurent (2025)](https://doi.org/10.1175/JTECH-D-24-0087.1) took the ratio of observed spectra to the Kraichnan model (`q = 5.26`, `kB` from shear epsilon, `Re_b > 200`) as the response. A tau fitted that way absorbs any error in `q`, in the spectral model and in the fitting method; Ijichi & St. Laurent state that `q` and the response cannot be determined together (their Fig. 4 shades `q` from 3.2 to 7.9). They also find the response **platform-dependent**: a single pole of `8 ms * (U / 1 m/s)^(-1/2)` fits Slocum gliders carrying MicroRiders (0.2-0.4 m/s), but on a VMP-6000 at 0.67 m/s it attenuates a factor of 2 more at 30 Hz than the best fit there, a speed-independent single pole of about 6 ms. Other comparisons against shear epsilon: on a CTD frame, [Goto et al. (2018)](https://doi.org/10.1175/JTECH-D-17-0069.1) found FP07 epsilon low against a free-fall VMP at fall rates above 0.9 m/s and epsilon above `1e-8 W/kg`, which they attribute to insufficient response correction; on a VMP-6000, [Yasuda et al. (2021)](https://doi.org/10.1007/s10872-020-00574-2) found depth-averaged (> 10 m) FP07 epsilon agreeing with shear epsilon down to `1e-11 W/kg` in two casts. The responses of Goto et al. (2016) and Ijichi & St. Laurent are all faster than `lueck` (comparison table in [fp07_tau_prefactor_PLAN.md](fp07_tau_prefactor_PLAN.md)). None of them is the per-bead tau that `fp07-pair tau` measures and the FP07 calibration sheet carries: that is a property of the bead, from the ratio of the pair's spectra at the pair's own speed, and nothing anchors its absolute level ([fp07pair runbook, section 6](fp07pair/runbook.md#6-each-beads-time-constant-for-the-fp07-sheet-fp07-pair-tau)).
 
 ### A bead's slow response path (`fp07_slow_response`)
 
@@ -295,6 +297,10 @@ noise_physical = Noise_counts * G_HP * scale^2
 ```
 
 where `T_in_situ` is the in-situ temperature in Kelvin (`T_mean + 273.15`), distinct from the fixed `T_K ≈ 295 K` operating temperature used in the Johnson-noise term above.
+
+`R/R_0 = exp(beta_1 (1/T_in_situ - 1/T_0))`, and a finite `beta_2` multiplies `scale` by `1 + 2 (beta_1/beta_2) ln(R/R_0)` (`gradT_noise_odas.m`). `b`, `E_b`, `G_1`, `V_FS` and `B` describe the electronics; `T_0`, `beta_1` and `beta_2` are the bead's R(T), so they must be the coefficients the temperature was converted with (issue #245). Under perturb's `fp07.calibrate: true` that is the per-file in-situ fit for every channel it fitted (an order-1 fit has no `beta_2`, whatever the configuration carries; an order-3 fit adds `beta_3`) and the configuration's values for a channel it refused; the per-profile `T*_dT*` attributes carry the ones used, and `bead_coefficients_source` names an in-situ fit. Before that fix the noise model always took the configuration's: on SUNRISE 2021, whose configurations were rewritten file by file, that put it from 0.001x to 10^33x off.
+
+The ODAS form above inverts R(T) to first order: R from `beta_1` and `T_0` alone, the slope corrected to first order in `beta_2`. That is close for a factory-like curve (0.5% in power at 2 °C with `beta_2` = 2.5e5) but not for a per-file fit over a narrow range, which is often strongly curved (`beta_2` comparable to `beta_1`, `t_0` 165-512 K, `beta_1` < 0): on CASPER 2015 doug the form was off by more than 2x on 126 of 272 fitted channels, and by up to 8x10^5. So for a fitted curve the noise model inverts it exactly ([`fp07.py: bead_inversion`](../src/odas_tpw/chi/fp07.py)): it solves `1/T = 1/T_0 + L/beta_1 + L^2/beta_2 [+ L^3/beta_3]` for `L = ln(R/R_0)` on the bead's NTC branch (`d(1/T)/dL > 0`, where the file's own counts sit), and uses `scale = T^2 (1 + R/R_0)^2 / (2 eta R/R_0) * d(1/T)/dL`, which matches a finite difference of the conversion. Where the curve has no NTC root at the window's temperature (past a quadratic's turning point, or only roots where T rises with R) the noise model is NaN, with a warning and a count in the chi file (`bead_inversion_unsolved_windows_<channel>`), so that window gets no chi; the ODAS form would put back the value the exact inversion replaces. The configuration's coefficients, `fp07-cal` patched or not, keep the ODAS form, so a product without an in-situ fit is unchanged; there `beta_3` is not read.
 
 The conversion from frequency spectrum to wavenumber spectrum is:
 
@@ -476,6 +482,8 @@ where `k_1` and `k_u` are the initial low and high cutoffs (from the noise inter
 k* = 0.04 * kB * sqrt(kappa_T / nu)
 ```
 
+Since `kB * sqrt(kappa_T / nu) = kB * Pr^(-1/2)` is the Kolmogorov wavenumber `k_K`, this is `k* = 0.04 k_K`: the lowest fitted wavenumber proposed by Steinbuck et al. ([2009](https://doi.org/10.1175/2009JTECHO611.1)), at the top of the 0.03-0.04 `k_K` that Gibson et al. ([1970](https://doi.org/10.2514/3.6001)) measured, both as quoted by [Sanchez et al. (2011)](https://doi.org/10.1175/JPO-D-11-025.1), section 2b. The factor 3 in the next step is not in that account and is unsourced.
+
 3. Refine the lower integration limit:
 
 ```
@@ -566,6 +574,8 @@ On real data the structure is pervasive rather than confined to a few bad window
 | CASPER-West SN194, `K_max_ratio > 1.2` (348 of 2311 production profile files) | 4023 / 4859 | 0.985-1.002 | T1 0.270 (0.192-0.422), T2 0.275 (0.196-0.438) | 0.161 (0.202) |
 
 Of the CASPER-West windows above with `fom` in [0.98, 1.02], 87% exceed the null's p99. Their top third by `mad_shape` carries the issue #191 residual coherently: median `r - median(r)` of +1.5 dex at `k/kB = 0.02`, -0.35 to -0.44 between 0.27 and 0.61 and +0.3 at 1.3, with a lag-8 residual autocorrelation of 0.26 against -0.03 for the null, i.e. smooth structure rather than scatter. The CASPER-West values were rebuilt from the stored spectra of products that predate the variable; the same rebuild reproduces the stored `mad_shape` exactly (44 786 SN479 windows).
+
+Two published treatments of the low-wavenumber end bear on issue #191; they are context, not a decision. [Luketina & Imberger (2001)](https://doi.org/10.1175/1520-0426(2001)018%3C0100:DTKEDF%3E2.0.CO;2) start the band from the data: its lower edge is the lowest wavenumber where the observed spectrum meets the best-fit model, iterated, and the model supplies the variance below it. A candidate band `[k1, k2]` must contain the model's peak and reach well past it: `k1 < k_peak`, `k2 > 3 k_peak` and `log10(k2/k1) > 0.8` (their eq. 16). For the Kraichnan peak at `kB / sqrt(6*q)`, with `k2` the band's top, the second condition amounts to `K_max_ratio > 0.53` at `q = 5.26`. Under that rule a window that cannot meet all three has no admissible band, so it is refused rather than fitted. [Ijichi & St. Laurent (2025)](https://doi.org/10.1175/JTECH-D-24-0087.1) find temperature-gradient spectra at `Re_b > 40` following Kraichnan, while at lower `Re_b` their low-wavenumber part flattens or even falls, below the Ozmidov wavenumber `k_O = (N^3/epsilon)^(1/2) / (2*pi)`; they read it as stable finestructure contaminating the microstructure. Relative to `kB` that wavenumber is `k_O / kB = Re_b^(-3/4) * Pr^(-1/2)`, e.g. 0.07 at `Re_b = 10` and `Pr = 7`, above the `k/kB = 0.02` where the CASPER-West residual above is +1.5 dex (the `Re_b` of those windows is not checked here).
 
 ### K_max ratio
 
@@ -706,6 +716,10 @@ These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.p
 - Ruddick, B., A. Anis, and K. Thompson, 2000: [Maximum likelihood spectral fitting: The Batchelor spectrum.](https://doi.org/10.1175/1520-0426(2000)017%3C1541:MLSFTB%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **17**, 1541-1555.
 - Peterson, A.K. and I. Fer, 2014: [Dissipation measurements using temperature microstructure from an underwater glider.](https://doi.org/10.1016/j.mio.2014.05.002) *Methods in Oceanography*, **10**, 44-69.
 - Osborn, T.R. and C.S. Cox, 1972: [Oceanic fine structure.](https://doi.org/10.1080/03091927208236085) *Geophys. Fluid Dyn.*, **3**, 321-345.
+- Gibson, C.H., R.R. Lyon, and I. Hirschsohn, 1970: [Reaction product fluctuations in a sphere wake.](https://doi.org/10.2514/3.6001) *AIAA J.*, **8**, 1859-1863.
+- Luketina, D.A. and J. Imberger, 2001: [Determining turbulent kinetic energy dissipation from Batchelor curve fitting.](https://doi.org/10.1175/1520-0426(2001)018%3C0100:DTKEDF%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **18**, 100-113.
+- Steinbuck, J.V., M.T. Stacey, and S.G. Monismith, 2009: [An evaluation of chi_T estimation techniques: Implications for Batchelor fitting and epsilon.](https://doi.org/10.1175/2009JTECHO611.1) *J. Atmos. Oceanic Technol.*, **26**, 1652-1662.
+- Ijichi, T. and L. St. Laurent, 2025: [Revisiting issues in estimating spectra of ocean temperature microstructure.](https://doi.org/10.1175/JTECH-D-24-0087.1) *J. Atmos. Oceanic Technol.*, **42**, 1137-1148.
 
 ### FP07 thermistor response
 
@@ -715,6 +729,8 @@ These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.p
 - Vachon, P. and R.G. Lueck, 1984: A small combined temperature-conductivity probe. *Proceedings of the 1984 STD Conference and Workshop*, San Diego, Marine Technology Society.
 - Hill, K.D., 1987: [Observations on the velocity scaling of thermistor dynamic response functions.](https://doi.org/10.1063/1.1139444) *Rev. Sci. Instrum.*, **58**, 1235-1238.
 - Nash, J.D., T.B. Caldwell, M.J. Zelman, and J.N. Moum, 1999: [A thermocouple probe for high-speed temperature measurement in the ocean.](https://doi.org/10.1175/1520-0426(1999)016%3C1474:ATPFHS%3E2.0.CO;2) *J. Atmos. Oceanic Technol.*, **16**, 1474-1482.
+- Goto, Y., I. Yasuda, and M. Nagasawa, 2018: [Comparison of turbulence intensity from CTD-attached and free-fall microstructure profilers.](https://doi.org/10.1175/JTECH-D-17-0069.1) *J. Atmos. Oceanic Technol.*, **35**, 147-162.
+- Yasuda, I., and 11 coauthors, 2021: [Estimate of turbulent energy dissipation rate using free-fall and CTD-attached fast-response thermistors in weak ocean turbulence.](https://doi.org/10.1007/s10872-020-00574-2) *J. Oceanogr.*, **77**, 17-28.
 
 ### Noise model
 
@@ -723,6 +739,11 @@ These are the `rsi-tpw` defaults ([`rsi/chi_io.py`](../src/odas_tpw/rsi/chi_io.p
 ### DNS and empirical validation
 
 - Bogucki, D., J.A. Domaradzki, and P.K. Yeung, 1997: [Direct numerical simulations of passive scalars with Pr > 1 advected by turbulent flow.](https://doi.org/10.1017/S0022112097005727) *J. Fluid Mech.*, **343**, 111-130.
+- Smyth, W.D., 1999: [Dissipation-range geometry and scalar spectra in sheared stratified turbulence.](https://doi.org/10.1017/S0022112099006734) *J. Fluid Mech.*, **401**, 209-242.
+- Nash, J.D. and J.N. Moum, 2002: [Microstructure estimates of turbulent salinity flux and the dissipation spectrum of salinity.](https://doi.org/10.1175/1520-0485(2002)032%3C2312:MEOTSF%3E2.0.CO;2) *J. Phys. Oceanogr.*, **32**, 2312-2333.
+- Antonia, R.A. and P. Orlandi, 2003: [On the Batchelor constant in decaying isotropic turbulence.](https://doi.org/10.1063/1.1577346) *Phys. Fluids*, **15**, 2084-2086.
+- Sanchez, X., E. Roget, J. Planella, and F. Forcat, 2011: [Small-scale spectrum of a scalar field in water: The Batchelor and Kraichnan models.](https://doi.org/10.1175/JPO-D-11-025.1) *J. Phys. Oceanogr.*, **41**, 2155-2167.
+- Bogucki, D., H. Luo, and J.A. Domaradzki, 2012: [Experimental evidence of the Kraichnan scalar spectrum at high Reynolds numbers.](https://doi.org/10.1175/JPO-D-11-0214.1) *J. Phys. Oceanogr.*, **42**, 1717-1728.
 
 ### Software
 

@@ -76,6 +76,50 @@ See also [Best Practices](best_practices.md) and
   *J. Atmos. Ocean. Technol.*, 42(9), 1137--1148.
   [doi:10.1175/JTECH-D-24-0087.1](https://doi.org/10.1175/JTECH-D-24-0087.1)
 
+- **Luketina, D. A., & Imberger, J. (2001).** Determining turbulent
+  kinetic energy dissipation from Batchelor curve fitting.
+  *J. Atmos. Ocean. Technol.*, 18(1), 100--113.
+  [doi:10.1175/1520-0426(2001)018<0100:DTKEDF>2.0.CO;2](https://doi.org/10.1175/1520-0426(2001)018%3C0100:DTKEDF%3E2.0.CO;2)
+  Data-driven lower band edge and the band validity rule
+  (`k1 < k_peak`, `k2 > 3 k_peak`, span > 0.8 decade).
+
+- **Steinbuck, J. V., Stacey, M. T., & Monismith, S. G. (2009).** An
+  evaluation of chi_T estimation techniques: Implications for Batchelor
+  fitting and epsilon. *J. Atmos. Ocean. Technol.*, 26(8), 1652--1662.
+  [doi:10.1175/2009JTECHO611.1](https://doi.org/10.1175/2009JTECHO611.1)
+  Proposed `k* = 0.04 k_K` as the low end of a fit (as quoted by
+  Sanchez et al. 2011); the source of Method 2's `k_star`.
+
+## Kraichnan constant q
+
+- **Bogucki, D., Luo, H., & Domaradzki, J. A. (2012).** Experimental
+  evidence of the Kraichnan scalar spectrum at high Reynolds numbers.
+  *J. Phys. Oceanogr.*, 42(10), 1717--1728.
+  [doi:10.1175/JPO-D-11-0214.1](https://doi.org/10.1175/JPO-D-11-0214.1)
+  Pool data; `q_K = 5.26` imposed from Bogucki et al. (1997), not measured.
+
+- **Sanchez, X., Roget, E., Planella, J., & Forcat, F. (2011).**
+  Small-scale spectrum of a scalar field in water: The Batchelor and
+  Kraichnan models. *J. Phys. Oceanogr.*, 41(11), 2155--2167.
+  [doi:10.1175/JPO-D-11-025.1](https://doi.org/10.1175/JPO-D-11-025.1)
+  `q_K = 7.9 +- 2.5` at Cox >= 50 with epsilon from shear.
+
+- **Nash, J. D., & Moum, J. N. (2002).** Microstructure estimates of
+  turbulent salinity flux and the dissipation spectrum of salinity.
+  *J. Phys. Oceanogr.*, 32(8), 2312--2333.
+  [doi:10.1175/1520-0485(2002)032<2312:MEOTSF>2.0.CO;2](https://doi.org/10.1175/1520-0485(2002)032%3C2312:MEOTSF%3E2.0.CO;2)
+  `q_K` ~7.5 (geometric mean) against shear epsilon.
+
+- **Smyth, W. D. (1999).** Dissipation-range geometry and scalar spectra
+  in sheared stratified turbulence. *J. Fluid Mech.*, 401, 209--242.
+  [doi:10.1017/S0022112099006734](https://doi.org/10.1017/S0022112099006734)
+  `q_K = 7.3 +- 0.4` (as quoted by Bogucki et al. 2012).
+
+- **Antonia, R. A., & Orlandi, P. (2003).** On the Batchelor constant in
+  decaying isotropic turbulence. *Phys. Fluids*, 15(7), 2084--2086.
+  [doi:10.1063/1.1577346](https://doi.org/10.1063/1.1577346)
+  Decaying DNS: `q_K` about 3.4.
+
 ## FP07 thermistor response
 
 - **Lueck, R. G., Hertzman, O., & Osborn, T. R. (1977).** The spectral
@@ -108,6 +152,16 @@ See also [Best Practices](best_practices.md) and
   thermistor dynamic response functions. *Rev. Sci. Instrum.*, 58,
   1235--1238. [doi:10.1063/1.1139444](https://doi.org/10.1063/1.1139444)
   Reports a speed exponent of -0.5 (as cited by Goto et al. 2016).
+
+- **Goto, Y., Yasuda, I., & Nagasawa, M. (2018).** Comparison of
+  turbulence intensity from CTD-attached and free-fall microstructure
+  profilers. *J. Atmos. Ocean. Technol.*, 35(1), 147--162.
+  [doi:10.1175/JTECH-D-17-0069.1](https://doi.org/10.1175/JTECH-D-17-0069.1)
+
+- **Yasuda, I., and 11 coauthors (2021).** Estimate of turbulent energy
+  dissipation rate using free-fall and CTD-attached fast-response
+  thermistors in weak ocean turbulence. *J. Oceanogr.*, 77(1), 17--28.
+  [doi:10.1007/s10872-020-00574-2](https://doi.org/10.1007/s10872-020-00574-2)
 
 ## Coherent noise removal
 

@@ -777,9 +777,8 @@ def _iterative_fit(
 
     Three iterations refining the LOWER integration limit
     ``k_l = max(K[1], 3*k_star)`` (with ``k_star = 0.04*kB*sqrt(kappa/nu)``,
-    a viscous-convective onset scale; the 0.04 coefficient follows the
-    original implementation and has not been verified against Peterson &
-    Fer's text) and applying a model-based correction for the variance
+    the inertial-convective to viscous-convective transition; source below)
+    and applying a model-based correction for the variance
     outside [``k_l``, ``k_u``] and for in-band FP07 attenuation (see
     :func:`_variance_correction`).  The UPPER limit ``k_u`` is fixed at
     the last valid wavenumber (noise/anti-aliasing criterion) and is not
@@ -793,6 +792,15 @@ def _iterative_fit(
     0.02-0.16 for a model-consistent spectrum; only a model-vs-observed shape
     mismatch in the low-k sliver below ``k_l`` makes it matter, a second-order
     effect.  So this is a documented-provenance note, not a correctness risk.
+
+    Source of the 0.04: ``kB*sqrt(kappa/nu) = kB*Pr**-0.5`` is the Kolmogorov
+    wavenumber ``k_K``, so ``k_star = 0.04*k_K``.  Gibson et al. (1970) found
+    k*/k_K = 0.03-0.04 (0.01-0.02 of kB) in the laboratory, and Steinbuck et
+    al. (2009) proposed k* = 0.04 k_K (~0.02 kB) as the lowest wavenumber of a
+    Batchelor fit, both as quoted by Sanchez et al. (2011, section 2b, p. 2159;
+    doi:10.1175/JPO-D-11-025.1), who also start their chi integral there (their
+    eq. 12).  The factor 3 in ``k_l`` is not in that account and is unsourced
+    here; Steinbuck et al. was not read directly.
 
     Parameters
     ----------
