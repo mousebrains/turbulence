@@ -51,6 +51,14 @@ class ProbeSeries:
     instrument_sn: str = "?"
     probe_sn: dict[str, str] = field(default_factory=dict)
     speed: np.ndarray | None = None  # m/s, for the flushing gate
+    bad_buffer: dict[str, int] = field(default_factory=dict)
+    """Channel -> counts blanked (set NaN) as RDL bad buffers; see :func:`load_probe_series`."""
+    bad_buffer_dropped: list[str] = field(default_factory=list)
+    """Channels blanked WHOLE in this file: a marker run smears their deconvolution file-wide."""
+    alive: dict[str, bool] = field(default_factory=dict)
+    """Channel -> did the bead record live data here (:func:`thermistor_alive`), as recorded.
+
+    Empty for a series built by hand; :func:`bead_alive` then judges the counts held."""
 
     @property
     def fs(self) -> float:
@@ -324,6 +332,18 @@ def load_probe_series(
     *direction* is passed to the profile detector: ``glide`` (both legs, a
     glider yo) or ``down`` (a VMP, whose hauled-in ascent puts the sensors in
     the body's wake) or ``up``.
+
+    Counts PFile reports as RDL bad buffers, or as record slots a framing
+    repair rebuilt by interpolation, are not measurements and are set to NaN
+    (issue #248), so ``pairs`` drops every kernel they touch (#238's gap
+    path).  The mask is chi's per-thermistor one
+    (:func:`odas_tpw.rsi.bad_buffer.probe_masks` on the channel's own
+    ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's local
+    smear).  A marker run on a deconvolved thermistor moves the whole file
+    (:func:`smeared_file_wide`), so that channel is blanked in full and named
+    in ``bad_buffer_dropped``.  ``bad_buffer`` counts what was blanked, per
+    channel.  A v6.0 file's records flagged in header word 16 are not in the
+    report (PFile only warns), so they are not blanked.
     """
     from odas_tpw.rsi.p_file import PFile
 
@@ -344,7 +364,11 @@ def load_probe_series(
     factory: dict[str, np.ndarray] = {}
     beta_key: dict[str, str] = {}
     probe_sn: dict[str, str] = {}
+    bad_buffer: dict[str, int] = {}
+    dropped: list[str] = []
+    alive: dict[str, bool] = {}
     ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
+    fs = 1.0 / float(np.median(np.diff(t))) if n > 1 else float("nan")
     for name in wanted:
         if name not in pf.channels_raw or name not in by_name:
             continue
@@ -357,6 +381,19 @@ def load_probe_series(
         )
         cfg = by_name[name]
         bridge[name] = BridgeParams.from_channel_config(cfg, name)
+        # Judged on the counts as recorded, before any blanking: a file left out
+        # for a marker run below still had a live bead in it.
+        alive[name] = thermistor_alive(counts[name], bridge[name], fs)
+        bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
+        if bad is not None and smeared_file_wide(pf, name):
+            bad = np.ones(n, dtype=bool)
+            dropped.append(name)
+        if bad is not None:
+            blank = bad & np.isfinite(counts[name])
+            if blank.any():
+                # A copy: the slice can be a view onto pf.channels_raw.
+                counts[name] = np.where(blank, np.nan, counts[name])
+                bad_buffer[name] = int(blank.sum())
         factory[name] = config_to_coeffs(cfg)
         beta_key[name] = live_beta_key(cfg)
         probe_sn[name] = str(cfg.get("sn", "") or "").strip() or "(no SN)"
@@ -406,4 +443,215 @@ def load_probe_series(
         instrument_sn=str(pf.config.get("instrument_info", {}).get("sn", "?") or "?"),
         probe_sn=probe_sn,
         speed=speed,
+        bad_buffer=bad_buffer,
+        bad_buffer_dropped=dropped,
+        alive=alive,
     )
+
+
+ALIVE_WINDOW_S = 4.0
+"""[s] The window a thermistor is judged dead or alive on: a chi dissipation window
+(4 x 1 s FFT), the unit fp07-pair's dead-bead rule judges."""
+
+ALIVE_MIN_RANGE_L = 4e-4
+"""The least 1-99% range of ``L`` over a file that is live data: ~10 mK of an FP07
+(``|dT/dL|`` 25-30 K in the calibration sheet).  SN465's bench test probes, one
+reading its config's ``T_0`` at 16.145 degC, span 0.6-1.0 mK over files that hold
+detected profiles; profiling beads span hundreds of mK to tens of K (osu684 2023 and
+2025, osu685 2023: at least 3.8 K in a sample of 84 such channel files)."""
+
+
+def thermistor_alive(counts: np.ndarray, bridge: BridgeParams, fs: float) -> bool:
+    """Did this thermistor record live data in this file?  (issue #249)
+
+    fp07-pair's dead-bead rule, on the counts rather than the spectrum: a window
+    is dead when the counts do not move at all (an identically zero gradient
+    spectrum) or when any of it is pinned on the ADC, where a live bead never
+    goes (fp07cal's
+    ``clipped_counts``: SUNRISE 2021 Pelican's T2 through SR1P_516, and SN465's
+    open test port at -17.087 degC), and the file is dead for the bead when at
+    least ``DEAD_FILE_FRAC`` (half) of its windows are.  A file whose ``L`` spans
+    less than :data:`ALIVE_MIN_RANGE_L` is dead too, constant through the file
+    but for electronics noise: a test probe reading its ``T_0``, whose spectrum
+    is not identically zero.  Windows with no finite count are not judged; a
+    file with none is not alive.
+    """
+    from odas_tpw.chi.fp07_bead_tau import DEAD_FILE_FRAC
+    from odas_tpw.fp07cal.logr import log_r
+
+    c = np.asarray(counts, dtype=np.float64)
+    if c.size == 0:
+        return False
+    with np.errstate(invalid="ignore"):
+        L, clipped = log_r(c, bridge)
+    live = np.isfinite(L) & ~clipped
+    if not live.any():
+        return False
+    lo, hi = np.percentile(L[live], [1, 99])
+    if hi - lo < ALIVE_MIN_RANGE_L:
+        return False
+    w = max(2, round(ALIVE_WINDOW_S * fs)) if np.isfinite(fs) and fs > 0 else c.size
+    judged = dead = 0
+    for i in range(0, c.size, w):
+        x, k = c[i: i + w], clipped[i: i + w]
+        ok = np.isfinite(x)
+        if not ok.any():
+            continue
+        judged += 1
+        if np.ptp(x[ok]) == 0 or k[ok].any():
+            dead += 1
+    return judged > 0 and dead < DEAD_FILE_FRAC * judged
+
+
+def bead_alive(probe: ProbeSeries, channel: str) -> bool:
+    """:attr:`ProbeSeries.alive` for *channel*, or judged on the counts the series holds.
+
+    As the loader judges, on the counts as recorded: a channel left out of the file
+    whole for a marker run (``bad_buffer_dropped``) had live counts before they were
+    blanked, so it is alive; locally blanked windows are simply not judged.
+    Duck-typed series lacking what it needs are not judged alive.
+    """
+    alive = getattr(probe, "alive", None) or {}
+    if channel in alive:
+        return bool(alive[channel])
+    if channel in (getattr(probe, "bad_buffer_dropped", None) or []):
+        return True
+    counts = getattr(probe, "counts", None) or {}
+    bridge = getattr(probe, "bridge", None) or {}
+    if counts.get(channel) is None or channel not in bridge:
+        return False
+    return thermistor_alive(counts[channel], bridge[channel], probe.fs)
+
+
+DEATH_RUN_FILES = 3
+"""Consecutive dead files, after the bead has lived, that end its span (issue #249).
+
+A bead that died and then passes the alive rule now and then is dead: osu685's
+T2245 (ARCTERX-2023, unscreened) died at A685_0158, 2023-06-12, and 77 of its 483
+later files still pass it, scattered between dead runs of up to 222.  One or two
+dead files between live ones are tolerated as a glitch; no deployment here has one
+inside a live period (osu684 2023/2025, osu685 2023/2025, SUNRISE 2021 Pelican),
+and osu685 2023 T1's one isolated dead file opens its death (16 dead files follow
+the next live one), so 2 or 3 end every span here alike."""
+
+
+def alive_span(files: list[tuple[float, float, bool]]) -> dict | None:
+    """When a bead was alive, from ``(time_start, time_end, alive)`` per file of a run.
+
+    The span runs from the first live file to the last live file before the bead's
+    death: the first run of :data:`DEATH_RUN_FILES` consecutive dead files after it
+    first lived.  ``n_files`` counts the live files in it and ``n_files_dead`` the dead
+    ones before the death.  ``first_dead`` is the death's start (None when the bead
+    never died within the run), and ``n_files_alive_after_death`` the files that still
+    passed the alive rule after it, of ``n_files_after_death``.  None when no file
+    was alive.
+    """
+    rows = sorted(files, key=lambda r: r[0])
+    live = [i for i, r in enumerate(rows) if r[2]]
+    if not live:
+        return None
+    death, run = None, 0
+    for i in range(live[0], len(rows)):
+        run = 0 if rows[i][2] else run + 1
+        if run == DEATH_RUN_FILES:
+            death = i - DEATH_RUN_FILES + 1
+            break
+    upto = rows[:death] if death is not None else rows
+    alive = [r for r in upto if r[2]]
+    after = rows[death:] if death is not None else []
+    return {
+        "time_start": float(alive[0][0]),
+        "time_end": float(alive[-1][1]),
+        "n_files": len(alive),
+        "n_files_dead": len(upto) - len(alive),
+        "first_dead": None if death is None else float(rows[death][0]),
+        "n_files_after_death": len(after),
+        "n_files_alive_after_death": sum(1 for r in after if r[2]),
+    }
+
+
+def bad_buffer_mask(pf: Any, name: str) -> np.ndarray:
+    """Channel *name*'s slow samples that PFile reports as bad buffers, masked as chi does.
+
+    For a reference built from the instrument's own channels (runbook section 8):
+    ``JAC_T`` as itself, ``P`` with its pre-emphasised ``P_dP`` folded in and
+    widened over the deconvolution's 3 ``diff_gain``.  True = not a measurement.
+    """
+    by_name = {str(c.get("name", "")).strip(): dict(c) for c in pf.config["channels"]}
+    n = len(pf.t_slow)
+    ratio = max(1, round(float(pf.fs_fast) / float(pf.fs_slow)))
+    bad = _bad_buffer_mask(pf, name, by_name, n, ratio)
+    return np.zeros(n, dtype=bool) if bad is None else bad
+
+
+def _bad_buffer_mask(
+    pf: Any, name: str, by_name: dict[str, dict], n: int, ratio: int
+) -> np.ndarray | None:
+    """Channel *name*'s bad-buffer samples on the slow grid, or None when it has none.
+
+    The definition is chi's (:func:`odas_tpw.rsi.bad_buffer.probe_masks`), not a
+    second one: the channel chi would read for this bead (``T1_dT1`` when the
+    file has it, else ``T1``) with the base ``T1`` folded in, every run of a
+    thermistor channel graded DROPPED, and a pre-emphasised pair's mask widened
+    over the 3 ``diff_gain`` the deconvolution smears a dropout forward (the
+    counts here ARE that deconvolution's output).  Taken on the fast grid at
+    every ``ratio``-th sample, which is where the counts were read.  Pressure is
+    left out: it does not enter a pair's value.
+    """
+    from odas_tpw.rsi.bad_buffer import probe_masks, sample_masks
+    from odas_tpw.rsi.channels import config_number
+
+    report = getattr(pf, "bad_buffer_report", None) or {}
+    if not report.get("confirmed"):
+        return None
+    t_fast, t_slow = np.asarray(pf.t_fast), np.asarray(pf.t_slow)
+    masks = sample_masks(report, t_fast.size, t_slow.size,
+                         fs_fast=pf.fs_fast, fs_slow=pf.fs_slow)
+    if not masks:
+        return None
+    probe = f"{name}_d{name}" if f"{name}_d{name}" in pf.channels else name
+    gains = {
+        k: config_number(c.get("diff_gain"), key="diff_gain", channel=k)
+        for k, c in by_name.items()
+        if k == probe and c.get("diff_gain") not in (None, "")
+    }
+    fast, _prov = probe_masks(masks=masks, probe_names=[probe], shared_names=(),
+                              t_fast=t_fast, t_slow=t_slow, fs_fast=float(pf.fs_fast),
+                              diff_gains=gains)
+    bad = np.asarray(fast[0][::ratio] != 0)
+    bad = bad[:n] if bad.size >= n else np.pad(bad, (0, n - bad.size))
+    return bad if bad.any() else None
+
+
+def smeared_file_wide(pf: Any, name: str) -> bool:
+    """Does an RDL marker run reach channel *name* through its deconvolution?
+
+    A thermistor (``T1`` with ``T1_dT1``), or ``P`` with ``P_dP`` for a
+    reference built from the instrument's own channels (runbook section 8).
+    PFile leaves a marker (the -32753 sentinel) in place and deconvolves
+    ``T1`` from ``T1`` and ``T1_dT1`` with two regressions over the WHOLE
+    file, which one such run moves: 64 sentinels injected into SN479_0006
+    moved ``T1`` more than 20 s from the run by -8..+57 mK (5-95%, in
+    ``T1_dT1``) and -234..-64 mK (in ``T1``), linearly in T, where the
+    3 ``diff_gain`` mask reaches only the local part (issue #259 fixes it in
+    PFile).  So the channel is left out of that file whole rather than
+    repaired here a second way.  Record slots a framing repair rebuilt are
+    interpolated BEFORE the deconvolution and stay local; a thermistor with no
+    pre-emphasised partner is not deconvolved.
+    """
+    found = (getattr(pf, "bad_buffer_report", None) or {}).get("confirmed") or {}
+    partner = f"{name}_d{name}"
+    if partner not in pf.channels:
+        return False
+    spr = int(getattr(pf, "samples_per_record", 0) or 0)
+    slots = (getattr(pf, "framing_report", None) or {}).get("rebuilt_slots") or []
+    for ch in (name, partner):
+        entry = found.get(ch)
+        if not entry:
+            continue
+        per = spr if str(entry.get("rate", "slow")) == "fast" else spr // max(1, int(pf.n_rows))
+        rebuilt = [(a * per, (a + k) * per) for a, k in slots]
+        for start, length in entry.get("spans") or []:
+            if not any(lo <= start and start + length <= hi for lo, hi in rebuilt):
+                return True  # not (only) a rebuilt slot: a marker run
+    return False

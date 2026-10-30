@@ -54,8 +54,30 @@ _DEFAULT_DIFF_GAIN = 0.94
 # config), plus ``diff_gain``, as float variable attrs on each T*_dT*
 # per-profile variable, and the NetCDF branch of _load_therm_channels reads
 # the same keys back (#131 m8, single source of truth). 'b' is included on
-# purpose: noise_thermchannel's eta term consumes it.
-THERM_CAL_ATTR_KEYS = ("e_b", "b", "gain", "beta_1", "beta_2", "adc_fs", "adc_bits", "T_0")
+# purpose: noise_thermchannel's eta term consumes it. 'beta_3' comes only with an
+# order-3 in-situ fit (#245): the noise model inverts a fitted curve exactly, so
+# it needs the whole curve; an embedded beta_3 is never read, so a product on the
+# embedded configuration is unchanged.
+THERM_CAL_ATTR_KEYS = (
+    "e_b", "b", "gain", "beta_1", "beta_2", "beta_3", "adc_fs", "adc_bits", "T_0"
+)
+
+# The ``PFile.channel_info`` key under which perturb's in-situ FP07 fit records,
+# on the BASE thermistor channel (T1, not T1_dT1), the coefficients that channel's
+# data were converted with, in the configuration's form ({t_0, beta_1[, beta_2[,
+# beta_3]]}, fp07cal.logr.coeffs_to_config). They replace the embedded t_0/beta_*
+# in the noise model (#245). Absent: the data are on the embedded coefficients.
+IN_SITU_COEFFS_KEY = "in_situ_coefficients"
+
+# Variable attr naming where T_0/beta_1/beta_2 came from when they are an in-situ
+# fit's (its value is the channel's ``calibration`` tag). Written only then, so a
+# product on the embedded configuration is unchanged; absent means embedded.
+BEAD_COEFFS_SOURCE_ATTR = "bead_coefficients_source"
+
+# Chi-file attr (``<prefix>_<channel>``): windows whose fitted curve has no NTC
+# root at the window's temperature, so the noise model is NaN there (with a
+# warning) and the window gets no chi. Written only when nonzero.
+BEAD_INVERSION_UNSOLVED_ATTR = "bead_inversion_unsolved_windows"
 
 
 def resolve_tau_scales(
@@ -276,6 +298,8 @@ def _compute_chi(
     n_therm = len(therm_names)
     diff_gains = data.get("diff_gains", [_DEFAULT_DIFF_GAIN] * n_therm)
     therm_cal = data.get("therm_cal", [{}] * n_therm)
+    cal_sources = list(data.get("therm_cal_source") or [None] * len(therm_cal))
+    noise_cal = _noise_cal(therm_cal, cal_sources)
     tau_scales = resolve_tau_scales(therm_names, fp07_tau_scale)
 
     if n_therm == 0:
@@ -386,7 +410,7 @@ def _compute_chi(
             l3_params,
             fp07_model=fp07_model,
             salinity=sal_prof,
-            therm_cal=therm_cal,
+            therm_cal=noise_cal,
             tau_scale=tau_scales,
         )
 
@@ -499,6 +523,15 @@ def _compute_chi(
                 if scale != 1.0:
                     ds.attrs[f"fp07_tau_scale_{name}"] = float(scale)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
+        # Which thermistors' noise model ran on an in-situ fit's T_0/beta_*
+        # rather than the embedded configuration's (#245). Only those: a file
+        # on the embedded coefficients is unchanged.
+        for ci, (name, src) in enumerate(zip(therm_names, cal_sources, strict=True)):
+            if src:
+                ds.attrs[f"{BEAD_COEFFS_SOURCE_ATTR}_{name}"] = src
+                n_unsolved = _count_unsolved_inversions(l3_chi.temp, noise_cal[ci])
+                if n_unsolved:
+                    ds.attrs[f"{BEAD_INVERSION_UNSOLVED_ATTR}_{name}"] = n_unsolved
         if pair_attrs:
             ds.attrs.update(pair_attrs)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)
@@ -1192,7 +1225,9 @@ def _build_chi_dataset(
 # ---------------------------------------------------------------------------
 
 
-def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
+def _extract_therm_cal(
+    ch_cfg: dict[str, Any], fitted: Mapping[str, float] | None = None
+) -> dict[str, float]:
     """Extract thermistor calibration parameters from PFile channel config.
 
     Config keys are lowercase (parse_config lowercases all keys); 'g' and
@@ -1204,6 +1239,17 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
     disagree about an arithmetic coefficient (``t_0 = 273.15+16``).  The
     linear term follows ``convert_therm``'s precedence (legacy ``beta`` before
     ``beta_1``), and ``beta_2 = Inf`` is no quadratic term, as there.
+
+    *fitted* is an in-situ fit's ``{t_0, beta_1[, beta_2[, beta_3]]}``
+    (:data:`IN_SITU_COEFFS_KEY`): the bead's R(T), which the channel's data
+    were converted with, so it replaces the embedded ``T_0``/``beta_1``/
+    ``beta_2`` WHOLE and adds ``beta_3`` when it has one. An order-1 fit has
+    no quadratic term, so an embedded ``beta_2`` must not survive under it.
+    ``e_b``, ``b``, ``gain`` and ``adc_*`` describe the electronics and stay
+    the embedded values. Without a fit ``beta_3`` is never read: the noise
+    model's ODAS form has no cubic term (an ``fp07-cal`` patched order-3
+    configuration keeps that limitation), and a fit's curve is inverted
+    exactly instead (:func:`odas_tpw.chi.fp07.bead_inversion`).
     """
     cal = {}
     name = str(ch_cfg.get("name", "?"))
@@ -1218,19 +1264,105 @@ def _extract_therm_cal(ch_cfg: dict[str, Any]) -> dict[str, float]:
         cal["gain"] = cal.pop("g")
     if "t_0" in cal:
         cal["T_0"] = cal.pop("t_0")
+    if fitted is not None:
+        cal["T_0"] = float(fitted["t_0"])
+        cal["beta_1"] = float(fitted["beta_1"])
+        if fitted.get("beta_2") is not None:
+            cal["beta_2"] = float(fitted["beta_2"])
+        else:
+            cal.pop("beta_2", None)
+        if fitted.get("beta_3") is not None:
+            cal["beta_3"] = float(fitted["beta_3"])
     return cal
 
 
-def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, dict[str, float]]:
+def _base_therm_name(name: str) -> str:
+    """The bead's own channel: ``T1`` for ``T1_dT1``, *name* itself otherwise."""
+    m = re.match(r"^(\w+)_d\1$", name)
+    return m.group(1) if m else name
+
+
+def _bead_fit(
+    channel_info: Mapping[str, Mapping[str, Any]] | None, name: str
+) -> Mapping[str, float] | None:
+    """The in-situ fit recorded for *name*'s bead, or None (embedded coefficients).
+
+    *name* is a thermistor channel (``T1``) or its pre-emphasized gradient
+    channel (``T1_dT1``); the fit is recorded on the base channel.
+    """
+    if not channel_info:
+        return None
+    fit = channel_info.get(_base_therm_name(name), {}).get(IN_SITU_COEFFS_KEY)
+    return fit if fit else None
+
+
+def _bead_coeffs_source(
+    channel_info: Mapping[str, Mapping[str, Any]] | None, name: str
+) -> str | None:
+    """:data:`BEAD_COEFFS_SOURCE_ATTR`'s value for *name*, or None (embedded).
+
+    The bead's ``calibration`` tag, which names the fit's order and reference.
+    """
+    if _bead_fit(channel_info, name) is None:
+        return None
+    assert channel_info is not None  # _bead_fit returned a fit
+    tag = channel_info.get(_base_therm_name(name), {}).get("calibration")
+    return str(tag) if tag else "in-situ fit"
+
+
+def _noise_cal(
+    therm_cal: Sequence[Mapping[str, Any]], sources: Sequence[str | None]
+) -> list[dict[str, Any]]:
+    """The per-thermistor noise-model coefficients: *therm_cal*, flagged for exact
+    inversion where *sources* says an in-situ fit supplied them (#245).
+
+    A strongly curved per-file fit put the ODAS order-1 inversion more than 2x
+    off in power on 126 of CASPER 2015 doug's 272 fitted channels. Gated on the
+    source, so the embedded configuration keeps the ODAS form bit for bit. The
+    two lists are parallel by construction (:func:`_load_therm_channels`); a
+    mismatch is an error, never a silent shift of later channels onto defaults.
+    """
+    return [
+        {**cal, "exact_inversion": True} if src else dict(cal)
+        for cal, src in zip(therm_cal, sources, strict=True)
+    ]
+
+
+def _count_unsolved_inversions(T_means: Any, cal: Mapping[str, Any]) -> int:
+    """Windows the noise model could not invert exactly (no NTC root).
+
+    Zero unless *cal* asks for the exact inversion of a curved polynomial;
+    a non-finite temperature is not counted (it gives no noise model either way).
+    """
+    if not cal.get("exact_inversion") or ("beta_2" not in cal and "beta_3" not in cal):
+        return 0
+    from odas_tpw.chi.fp07 import bead_inversion
+
+    T = np.asarray(T_means, dtype=np.float64)
+    if T.size == 0:
+        return 0
+    _, _, solved = bead_inversion(
+        T, cal["T_0"], cal["beta_1"], cal.get("beta_2"), cal.get("beta_3")
+    )
+    return int(np.count_nonzero(~solved & np.isfinite(T)))
+
+
+def _therm_gradient_config(
+    config: dict[str, Any],
+    name: str,
+    channel_info: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[float, dict[str, float]]:
     """``(diff_gain, therm_cal)`` for a pre-emphasized T*_dT* channel.
 
     ``diff_gain`` comes from the gradient channel's own config section; the
     thermistor calibration comes from the base channel (T1 for T1_dT1) via
-    :func:`_extract_therm_cal`. Single source of truth (#131 m8 F7): the .p
-    branch of :func:`_load_therm_channels` and the per-profile NetCDF write
-    path (``profile._load_from_pfile``) both call this, so what
-    ``extract_profiles`` embeds as variable attrs is byte-for-byte what the
-    .p path computes.
+    :func:`_extract_therm_cal`, with the bead's in-situ fit from
+    *channel_info* (``PFile.channel_info``) in place of the embedded
+    ``T_0``/``beta_*`` when perturb fitted one (#245). Single source of truth
+    (#131 m8 F7): the .p branch of :func:`_load_therm_channels` and the
+    per-profile NetCDF write path (``profile._load_from_pfile``) both call
+    this, so what ``extract_profiles`` embeds as variable attrs is
+    byte-for-byte what the .p path computes.
     """
     ch_cfg: dict = next(
         (ch for ch in config["channels"] if ch.get("name") == name),
@@ -1239,13 +1371,12 @@ def _therm_gradient_config(config: dict[str, Any], name: str) -> tuple[float, di
     diff_gain = config_number(
         ch_cfg.get("diff_gain"), _DEFAULT_DIFF_GAIN, key="diff_gain", channel=name
     )
-    m = re.match(r"^(\w+)_d\1$", name)
-    base_name = m.group(1) if m else name
+    base_name = _base_therm_name(name)
     base_cfg: dict = next(
         (ch for ch in config["channels"] if ch.get("name") == base_name),
         {},
     )
-    return diff_gain, _extract_therm_cal(base_cfg)
+    return diff_gain, _extract_therm_cal(base_cfg, _bead_fit(channel_info, base_name))
 
 
 def _pair_identity(source: Any, therm_names: list[str]) -> tuple[str, list[str]]:
@@ -1487,7 +1618,9 @@ def _load_therm_channels(
     and from the per-profile variable attrs written by ``extract_profiles``
     for NetCDF sources (#131 m8); a NetCDF file without those attrs (written
     before their introduction) falls back to the generic defaults with a
-    logged warning.
+    logged warning. A PFile whose beads perturb fitted in situ gives each
+    fitted bead's coefficients instead of the embedded ones (#245), and
+    ``therm_cal_source`` names them per channel (None: embedded).
     """
     from odas_tpw.rsi.helpers import load_channels
     from odas_tpw.rsi.p_file import PFile
@@ -1510,6 +1643,7 @@ def _load_therm_channels(
         pf = None
 
     therm_cal: list[dict[str, float]] = []
+    therm_cal_source: list[str | None] = []
 
     if pf is not None:
         from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
@@ -1520,9 +1654,10 @@ def _load_therm_channels(
                 # diff_gain from the gradient channel's config; thermistor
                 # calibration from the base channel (T1 for T1_dT1). Shared
                 # with the per-profile NetCDF write path (#131 m8 F7).
-                dg, cal = _therm_gradient_config(pf.config, name)
+                dg, cal = _therm_gradient_config(pf.config, name, pf.channel_info)
                 diff_gains.append(dg)
                 therm_cal.append(cal)
+                therm_cal_source.append(_bead_coeffs_source(pf.channel_info, name))
 
         # If no pre-emphasized channels, use T channels with first-difference
         if not therm:
@@ -1536,7 +1671,8 @@ def _load_therm_channels(
                         (ch for ch in pf.config["channels"] if ch.get("name") == name),
                         {},
                     )
-                    therm_cal.append(_extract_therm_cal(ch_cfg))
+                    therm_cal.append(_extract_therm_cal(ch_cfg, _bead_fit(pf.channel_info, name)))
+                    therm_cal_source.append(_bead_coeffs_source(pf.channel_info, name))
     else:
         # NetCDF source — look for gradient channels or T channels.
         # _nc_filled: masked _FillValue samples become NaN, never the raw
@@ -1550,15 +1686,16 @@ def _load_therm_channels(
         ds = nc.Dataset(str(source), "r")
 
         # Per-profile files written by extract_profiles carry the FP07
-        # electronics coefficients as variable attrs (#131 m8): ``diff_gain``
-        # plus the THERM_CAL_ATTR_KEYS subset present in the .p config.
-        # NOTE: the attrs carry the FACTORY coefficients from the embedded
-        # config string; perturb's fp07 in-situ calibration may have rewritten
-        # the channel DATA before the per-profile file was written. That is
-        # correct here — the attrs describe the ELECTRONICS (noise floor and
-        # bilinear differentiator gain), and the factory coefficients still
-        # beat the generic defaults they replace.
+        # coefficients as variable attrs (#131 m8): ``diff_gain`` plus the
+        # THERM_CAL_ATTR_KEYS subset. Two kinds: e_b, b, gain and adc_* describe
+        # the ELECTRONICS and are always the embedded config's; T_0, beta_1 and
+        # beta_2 are the BEAD's R(T), which converts the noise counts to kelvin,
+        # and are the coefficients the channel's data were converted with --
+        # perturb's in-situ fit where it fitted one (BEAD_COEFFS_SOURCE_ATTR
+        # names it, beta_3 joins them for an order-3 fit, and the noise model
+        # inverts that curve exactly), the embedded config's otherwise (#245).
         missing_attr_vars: list[str] = []
+        stale_fit_vars: list[str] = []
 
         def _read_therm_attrs(vname: str, var: Any) -> None:
             attr_names = set(var.ncattrs())
@@ -1571,6 +1708,15 @@ def _load_therm_channels(
             therm_cal.append(
                 {k: float(var.getncattr(k)) for k in THERM_CAL_ATTR_KEYS if k in attr_names}
             )
+            if BEAD_COEFFS_SOURCE_ATTR in attr_names:
+                therm_cal_source.append(str(var.getncattr(BEAD_COEFFS_SOURCE_ATTR)))
+            else:
+                therm_cal_source.append(None)
+                # Data fitted in situ, coefficients embedded: written before #245.
+                if "diff_gain" in attr_names and str(
+                    getattr(var, "calibration", "")
+                ).startswith("in-situ"):
+                    stale_fit_vars.append(vname)
 
         for vname in sorted(ds.variables.keys()):
             var = ds.variables[vname]
@@ -1600,10 +1746,20 @@ def _load_therm_channels(
                 ", ".join(missing_attr_vars),
                 _DEFAULT_DIFF_GAIN,
             )
+        if stale_fit_vars:
+            logger.warning(
+                "%s: %s carry in-situ calibrated data but the EMBEDDED bead "
+                "coefficients (per-profile file written before issue #245), so "
+                "the chi noise model is on a different calibration from the "
+                "data; re-extract the profiles to fix it",
+                Path(source).name,
+                ", ".join(stale_fit_vars),
+            )
 
     data["therm"] = therm
     data["diff_gains"] = diff_gains
     data["therm_cal"] = therm_cal if therm_cal else [{}] * len(therm)
+    data["therm_cal_source"] = therm_cal_source
     return data
 
 

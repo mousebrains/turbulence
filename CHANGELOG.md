@@ -350,6 +350,247 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Record framing".
 
 ### Fixed
+- **The chi noise model now uses the FP07 coefficients the data were
+  converted with, and inverts a fitted curve exactly (issue #245).** Under
+  perturb's `fp07.calibrate: true` the channel data were on the per-file
+  in-situ fit while the noise model converted its counts to kelvin with the
+  `.p` file's embedded `T_0`, `beta_1` and `beta_2`. Those are the bead's
+  R(T); the code comments (and the #131 m8 entry below) had called them the
+  electronics. The fit's coefficients now ride on the base channel's
+  `PFile.channel_info` (`in_situ_coefficients`, the configuration's form) into
+  the `T*_dT*` attributes of the per-profile files, which chi reads, `beta_3`
+  included for an order-3 fit. An order-1 fit has no quadratic term, so an
+  embedded `beta_2` no longer survives under it. A channel the fit refused
+  keeps the embedded values, consistent with its data.
+  *Exact inversion.* The ODAS noise model takes R from the order-1 inversion
+  `exp(beta_1 (1/T - 1/T_0))` and corrects the slope to first order in
+  `beta_2`. A per-file fit over a narrow temperature range is often strongly
+  curved (`beta_2` comparable to `beta_1`, `t_0` 165-512 K, `beta_1` < 0),
+  and there that form was off by up to 8x10^5 in power against perturb's own
+  conversion: on CASPER 2015 doug, 126 of 272 fitted channels by more than
+  2x. For a fitted curve the noise model now solves the polynomial for
+  L = ln(R/R_0) (`chi.fp07.bead_inversion`) on the bead's NTC branch
+  (`d(1/T)/dL > 0`, where each file's own counts sit; the root nearest the
+  order-1 estimate was the other one on CASPER 2015 CAS_024 and CAS_035 and
+  Taiwan 2017 CAS_006) and takes the exact slope. It matches a finite
+  difference of the conversion to within 2% on all 1386 curved fitted
+  channels of the scanned deployments (1e-3 in the tests). Where the curve
+  has no NTC root at the window's temperature (past a quadratic's turning
+  point, or only roots where T rises with R) the noise model is NaN, so the
+  window gets no chi (every chi estimator returns NaN on it, as for a window
+  without a temperature), with a WARNING, and the chi file counts those
+  windows (`bead_inversion_unsolved_windows_<channel>`). The ODAS form is not
+  a fallback there: it is the value the exact inversion replaces, far off on
+  such curves (6x on DAT_048 T1 where it has a root), and it would jump at the
+  turning point, where the exact noise goes to zero. Only 2 of the 6930
+  temperatures checked (five per fitted channel) have no NTC root, but on that
+  channel they are a fifth of the file: Tanaka 2017-07 DAT_048 T1 (`beta_1`
+  −5034, `beta_2` −987) turns over at 1.65 °C inside its own 1.4-10.4 °C
+  data, and 562 of its 2779 T1 chi windows get no chi.
+  The exact inversion is gated on the fit: an embedded configuration,
+  `fp07-cal` patched or not, keeps the ODAS form and never reads `beta_3`, and
+  an order-1 curve is inverted exactly by the ODAS form already.
+  *Provenance.* The per-profile variable carries `bead_coefficients_source`
+  (the fit's `calibration` tag) and the chi file
+  `bead_coefficients_source_<channel>` when the fit supplied them; neither is
+  written otherwise. Reading a per-profile file whose data were fitted in
+  situ but whose coefficients are the embedded ones (written before this fix)
+  logs a WARNING. `pf.config` is left as read: it still matches the
+  `configuration_string` the products carry, and editing it would have had
+  to reproduce `fp07-cal patch`'s handling of a stale `beta_2` and of the
+  legacy `beta` key that `convert_therm` reads before `beta_1`. With
+  `calibrate: false`, including `fp07-cal` patched input, every product is
+  unchanged: on the SN479 fixture, a config-patched copy of it and two
+  SUNRISE 2021 Pelican files, every variable and attribute matched `main`
+  except the provenance stamps and `_input_manifest` (which hashes the engine).
+  *SUNRISE 2021 Pelican SN194, SR1P_518 and SR1P_520 (order 1; 1511 and 1530
+  chi windows):* the observed/model floor over 60-100 Hz in the quietest decile
+  (the `fp07-pair tau` rule-7 statistic) went from 0.25 and 0.20 to 1.21 and
+  1.50 on T2 (bead T2005), and from 1.11 and 0.76 to 1.22 and 1.45 on T1
+  (T1592), whose embedded coefficients are wrong in some files too
+  (SR1P_520: `beta_1` −1413.8). The excess left falls with frequency in
+  every case (SR1P_520 T2: 1.93, 1.53, 1.39, 1.25 over 60-70 ... 90-100 Hz),
+  as resolved signal does in these energetic casts (conjecture: not tested
+  against a quieter record). Chi itself barely moved (Method 1): median
+  ln(chi_new/chi_old) +0.0002 to +0.0055 per probe and file, 5-95% within
+  −0.10 and +0.21; 26 T2 windows gained a finite chi. *Curved glider fits,
+  against `main`:* CASPER 2015 CAS_035, noise model 1.47x and 1.36x, median
+  ln chi +0.10 and +0.07, finite windows 147 to 123 and 150 to 123 of 301;
+  Taiwan 2013 husker FSA_011, noise 0.51x and 0.73x, median ln chi +0.59 and
+  +0.27, finite windows 315 to 203 and 294 to 235 of 463 (in 18 sampled lost
+  windows the fitted kB rose 1.7-2.7x and K_max/kB fell to 0.32-0.61); CASPER
+  2015 CAS_063 unchanged (median ln chi 0.00).
+  *Which products move.* In 2021 the SUNRISE `.p` configurations were
+  rewritten FILE BY FILE, and many of the coefficients are not an FP07's
+  (WaltonSmith SN194 alone: `beta_1` from −230435 to 95481). Read from every
+  file's configuration against one or two scanned files' fit per bead
+  (approximate: a VMP bead's order-1 fits differ by a few percent), the noise
+  model was off by more than 1.25x in T1/T2 of 5/4 of Pelican SN194's 17 files
+  (T2: 4 of the 5 after the swap), 18/14 of Pelican SN412's 78, 14/15 of
+  WaltonSmith SN142's 47 and 18/17 of WaltonSmith SN194's 39, from 0.001x to
+  10^33x. The same estimate puts every file of SUNRISE 2019 and 2022 and
+  ARCTERX 2022-2025 (order 1) within 0.8-1.25x. Every file of the order-2
+  deployments, each on its own fit (branch over `main`, at the file's median
+  temperature): Taiwan 2013 husker all 76 fitted channels beyond 1.25x
+  (median 0.53x, 19 beyond 2x), Tanaka 2015-03 50 of 68 (0.76-0.81x), CASPER
+  2015 doug 24 of 272 (0.74-1.82x), Tanaka 2017-07 2 of 6 (one 0.36x; the
+  other 82 of the 88 files scanned had no fit), Tanaka 2015-11-19 1 of 22;
+  within 1.25x everywhere: CASPER 2017 doug (0.99-1.10x), Taiwan 2017 doug
+  (1.02-1.16x), Tanaka 2015-11-13 (0.82-1.11x), Tanaka 2017 sea025
+  (0.99-1.00x), ASTRAL 2023 (0.99-1.07x), CASPER 2017 VMP (1.06-1.12x) and
+  Taiwan 2017 VMP (1.01-1.08x). Not covered: beads no scanned file carried (ARCTERX 2023 Wake
+  SN409, part of SN465), and deployments whose configurations were not found
+  on SeaChest (RIOT, the ARCTERX 2025 gliders). A fit like husker FSA_011's
+  (`beta_1` 115, `beta_2` 145; the curve turns over at 27.08 °C, just above
+  its data) is one perturb's per-file fit should refuse; that is a separate
+  issue.
+- **`fp07-cal`'s robust loops judged residuals about zero, not about their
+  median (#246).** Both loops (the calibration's and the joint geometry
+  fit's) kept a pair when `|resid| <= 4 sigma`, with sigma itself measured
+  about the median. Least squares puts zero at the MEAN residual, which a
+  minority population offset by many sigma drags off the majority: every pair
+  then lay beyond 4 sigma, nothing was rejected, and the channel was refused at
+  the 1 K gate (a synthetic with 15% of the reference 2 K off: refused at
+  1.80 K). The test is now `|resid - median| <= 4 sigma`: that minority is
+  rejected and reported by the 1 K gate's `WARNING`, and the channel exports
+  with `t_0` within 0.1 mK of the truth. The same rule takes out WHOLE any
+  minority offset by more than 4 sigma, however small the offset: 40% of a
+  reference 50 mK off is now left out of the fit and of the stability blocks,
+  where before it was averaged in (rms 24 mK) and its step showed in the block
+  table. So a new `WARNING`, and the record's `robust_rejection`, say when the
+  loop rejected a population rather than a tail: more than 15% of the pairs,
+  or at least half of the rejections in profiles that lost more than half
+  their pairs, when those hold at least 0.5% of the pairs judged (one
+  rejected pair in a one-pair profile is not a population), with those
+  profiles' time span and the files. On 11 real deployments (SUNRISE
+  2019-2022, ARCTERX-2022 Interior and Wake, ARCTERX-2025 Interior SN142, and
+  the glider fits of osu684 2023/2025 and osu685 2023/2025; 30 fitted channels
+  with their geometry and raw-reference variants) the loops rejected 0.1-7.5%
+  of the pairs, and such profiles held at most 12.7% of the rejections and
+  0.44% of the pairs, so it fires on none. Their
+  orders, lags, pair counts and fitted ranges are unchanged and every curve
+  moves by at most 0.16 mK (osu684 2025 T1 at the range end; 0.10 mK on the
+  VMPs; median 0.008 mK); the chosen order's held-out score moves by
+  −2.6..+5.3% (median |0.2|%; +5.3% is ARCTERX-2022 Wake T2). Every
+  channel's console log has a new line with the rejection counts. The joint
+  geometry fit (`fit.geometry: true`, the template default) also judges the
+  pairs it leaves out of its fit set for want of a reference gradient, by the
+  calibration's residual (their geometry columns are zero): unjudged, they
+  were neither kept nor outliers, the 1 K gate counted them, and the bimodal
+  synthetic was still refused through them (2.01 K, at 15% and 30%). That is
+  coefficient-neutral inside `joint_fit` (its fit set is unchanged), but NOT
+  end to end: the wider outlier mask feeds `outlier_screen` and so the
+  held-out folds that choose the order and weigh a prior, and the export
+  gate. On the five glider fits (all with geometry) every coefficient and
+  order is unchanged, while the recorded held-out scores move: the chosen
+  order's by −8.6..−0.3% (osu684 2025 T2: 17.52 → 16.02 mK), another order's
+  by up to +4.7% (osu685 2023 T1, order 3: 31.86 → 33.36 mK). A close call
+  between orders, or between a full fit and a prior's shape inside the 5% tie
+  band, can therefore flip. Unscreened osu685 2023 T1, refused at 32.7 K
+  before, now exports with the 2248 pairs of its failed files beyond 1 K
+  flagged (worst 35.4 K, A685_0620), within ±0.055 mK of the screened fit the
+  sheet's T2244 entry came from; its dead T2 is still refused.
+- **`fp07-cal fit` without a prior exported a fit to isothermal noise with a
+  slope no FP07 has (#247).** #238 refuses a curve that is not NTC over its own
+  range; that is necessary, not sufficient. Over isothermal synthetic water 18
+  of 40 noise fits came out NTC, with a local beta (`1/(d(1/T_K)/dL)`, which is
+  dT/dL with the `T_K²` every thermistor shares divided out) 14-42 times an
+  FP07's, and exported. A fit is now also refused, `error: "not an FP07
+  curve"` with `beta_range_K` in the record, when its local beta leaves
+  2723-3416 K anywhere over its fitted range: the 2995-3105 K that all 23
+  calibrations of the sheet's 12 beads span (`prior.FP07_BETA_K`, 3.6% wide)
+  with the 10% the prior's check allows one bead. A constant, because a fit
+  without `fit.prior` has no sheet (it is in the repository, not the installed
+  package); a test fails when a calibration in the sheet leaves it, so it is
+  widened on purpose. Refused rather than flagged, like a non-NTC curve: a
+  refused channel can be refitted with `fit.prior` or looked into, while an
+  exported one is patched into the files. With a prior nothing changes
+  unless `mode: full` keeps a full fit outside the bound, which is now
+  refused too. Every calibration in the sheet, refitted without its prior
+  from the deployment its entry names (30 fitted channels with their variants,
+  above), still exports, its local beta at least 10% inside the bound.
+- **`fp07-cal` paired thermistor counts PFile had reported as bad buffers
+  (#248).** PFile reports RDL bad-buffer runs, and the record slots a framing
+  repair rebuilds by interpolation, and leaves the values in place; they
+  reached the calibration as measurements. `load_probe_series` now sets them
+  to NaN, so #238's gap path drops every pair they touch. The mask is not a
+  second definition: it is chi's per-thermistor one
+  (`rsi.bad_buffer.probe_masks` over `T1` and `T1_dT1`, every thermistor run
+  DROPPED, widened over the 3 `diff_gain` the deconvolution smears a dropout
+  forward), without the pressure channels, which do not enter a pair's value.
+  `ProbeSeries.bad_buffer` counts them per channel; the record carries
+  `bad_buffer_samples` (samples, files) and the report a note, and the
+  streaming pass's `per_profile` its own count. On ARCTERX-2022 Wake (one
+  rebuilt record in ARC1A046) 250 and 244 counts were blanked, 16 and 15
+  kernels touched them, all outside the descents already, and the fit is the
+  same pairs and the same curve to 1e-8 mK. The runbook's VMP reference
+  recipe (§8) blanks `JAC_T` and `P` the same way, through
+  `fp07cal.series.bad_buffer_mask`, which folds `P_dP`'s dilated mask into
+  `P`'s as chi does, and drops a file's `P` whole when a marker run on `P` or
+  `P_dP` smears its deconvolution (`fp07cal.series.smeared_file_wide`). A rebuilt record slot stays local because PFile
+  interpolates it before deconvolving; an RDL marker run (the sentinel, left
+  in place) on a thermistor or its pre-emphasised partner moves the
+  deconvolution's two whole-file regressions (issue #259, PFile's to fix): 64
+  sentinels injected into SN479_0006 moved `T1` by -8..+57 mK (in `T1_dT1`)
+  and -234..-64 mK (in `T1`), 5-95%, more than 20 s away and linearly in T,
+  where the local mask had reported them blanked. Such a channel is now left
+  out of that file whole rather than repaired a second way in fp07cal (one
+  file of a pooled fit), named in `ProbeSeries.bad_buffer_dropped`, the
+  record's `n_files_dropped`/`files_dropped`, the note and the streaming
+  pass's `bad_buffer_files_dropped`. None of 2248 glider and ARCTERX-2022
+  Wake files has a thermistor marker run (osu685 2023: U_EM in 22), so no
+  fit here changes. Not covered: a v6.0 file's records flagged in header
+  word 16, which PFile only warns about and does not report, are still
+  paired.
+- **`fp07-cal registry add` gave a bead the run's time span (#249).** A
+  record carried one span, the run's, so a bead that stopped giving pairs
+  before the run ended was entered with the run's `last` and file count:
+  SUNRISE 2021 Pelican's T1593 (on the ADC rail through SR1P_516) got
+  2021-06-29T10:33Z and 12 files, corrected by hand in #243 to
+  2021-06-28T02:58:43Z and 11. The record is now `schema: fp07-cal/2`: each
+  exported channel carries a `span`, and `registry add` uses it. A bead's
+  `first`/`last`/`n_files` are the TIME IT WAS ALIVE (the PI's decision,
+  2026-10-29), not the files that gave it pairs: the files of the run in which
+  its thermistor recorded live data, first sample of the first to last of the
+  last (`time_start`, `time_end`, `n_files`, `n_files_dead`). A file is dead
+  for a bead by fp07-pair's dead-bead rule on the counts
+  (`series.thermistor_alive`): half or more of its 4 s windows have counts that do not
+  move or touch the ADC rail (`clipped_counts`; SUNRISE 2021 Pelican's T2
+  through SR1P_516, SN465's open test port at -17.087 degC), or the whole
+  file spans less than ~10 mK of an FP07 (4e-4 in L: a test probe reading
+  its `T_0`, 0.6-1.0 mK). Judged on the counts as recorded, before any
+  bad-buffer blanking. `fp07-cal fit` measures it over EVERY file of the run in
+  its streaming pass, not the `max_fit_files` subsample, whose stride could
+  end a dying bead a file early; with `--no-stream` on a subsample `from`
+  says so and `registry add` prints a NOTE. A bead that died is dead even
+  where later files pass the rule now and then: the span ends at the last
+  live file before the first run of 3 consecutive dead files
+  (`series.DEATH_RUN_FILES`; one or two dead files between live ones are a
+  glitch, and none of the deployments here has such a gap), and the record
+  keeps `first_dead` and how many of the files after it still passed
+  (`n_files_alive_after_death` of `n_files_after_death`), which `fit` and
+  `registry add` print as a NOTE. Unscreened osu685 2023's T2245 died at
+  A685_0158 (2023-06-12T17:17Z), yet 77 of the 483 files after it pass the
+  rule, scattered between dead runs of up to 222; its span now ends with
+  A685_0157 (2023-06-12T15:03:12Z, the screened entry's end) where it had
+  run to 2023-08-07. `first_kept_pair`/`last_kept_pair` keep the extent of
+  the pairs the fit kept, the calibration's support. Nothing else in the
+  record changed: `patch` and
+  `registry add` still read an `fp07-cal/1` record, and `registry add` takes
+  the run's span from it, as before, with a NOTE. Refitting SUNRISE 2021
+  Pelican's first 12 files and adding T2 reproduces #243's corrected entry:
+  first 2021-06-22T01:39:05Z, last 2021-06-28T02:58:43Z, `n_files` 11 (one
+  file dead), and T1592's and T2005's spans there match the sheet. On the
+  glider runs, over every file (the sheet is not edited): osu684 2023 and the
+  screened osu685 2023 T2 match the sheet; osu685 2023 T1 (screened) has the
+  sheet's span in 592 files, not the 154 fitted; osu684 2025 is alive
+  2025-02-04T00:42:20Z .. 02-10T02:54:58Z in 119 files (sheet: 01:06:01 ..
+  01:21:19, 45) and osu685 2025 2025-02-04T01:19:54Z .. 04-10T22:50:50Z in
+  797 (sheet: 07:42:26 .. 15:36:58, 103): the sheet's glider entries carry
+  the fitted subsample's span and count. None of these beads died within its
+  run (unscreened osu685 2023 T1, whose failed files follow file 0618, ends
+  2023-08-06T10:41:14Z, 14 h after its screened entry: files 0619-0622 and
+  0624 still pass the rule).
 - **chi no longer uses FFT bin 1 (`chi.first_bin`, default 2; issue #191
   step 2).** Every FFT segment is linearly detrended, and a straight line is
   not orthogonal to bin 1's one-cycle sinusoid: the detrend removes part of
@@ -1683,6 +1924,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   logged warning naming the file — never silently. The attrs carry the **factory** coefficients from the embedded
   `.p` config string; perturb's FP07 in-situ calibration may rewrite the
   channel *data*, which is compatible — the attrs describe the electronics.
+  *(Corrected in issue #245: `T_0`/`beta_1`/`beta_2` are the bead's R(T), not
+  the electronics, so under an in-situ fit they must be the fit's. See the
+  Unreleased Fixed entry.)*
 - **`load_channels` carries vibration-sensor types** (`channel_types`: `.p`
   from `pf.channel_info`, NetCDF from the `sensor_type` attr
   `extract_profiles` writes), and the shared L1 builder labels an

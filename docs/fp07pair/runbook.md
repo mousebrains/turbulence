@@ -417,7 +417,9 @@ White content that raises the 60-100 Hz floor to ~1.2-1.45x moves the taus
 by 0.5-1.9 half-widths on the two generators, and a peak inside the fit band
 shows there only faintly while biasing tau badly (caught from ~1.27x); healthy
 real deployments read 1.00-1.21; a noise model too HIGH (floor 0.2-0.5x, as on
-SUNRISE 2021) does not bias it. Hence a refusal above 1.25x and only a flag
+SUNRISE 2021 before issue #245, whose noise model took each file's embedded
+coefficients, many of them not an FP07's, instead of perturb's fit) does not
+bias it. Hence a refusal above 1.25x and only a flag
 below 0.67x. **What it cannot catch:** content confined to the fit band, which
 barely reaches 60-100 Hz (the 30 Hz peak at amplitude 3 above). A second
 detector was tried and rejected: whether the ratio at 12-25 Hz differs between

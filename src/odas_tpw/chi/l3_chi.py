@@ -35,6 +35,13 @@ from odas_tpw.scor160.spectral import csd_matrix_batch, n_segments
 # odas_tpw.chi, not the other way round.
 _DOF_NUTTALL = 1.9
 
+# The therm_cal keys the noise model takes. beta_3 and exact_inversion come only
+# with an in-situ fit's coefficients (rsi.chi_io, #245).
+_NOISE_CAL_KEYS = (
+    "e_b", "gain", "b", "beta_1", "beta_2", "beta_3", "T_0", "adc_fs", "adc_bits",
+    "exact_inversion",
+)
+
 
 @dataclass
 class _SectionResult:
@@ -293,11 +300,7 @@ def _process_section_chi(
     noise_all = np.empty((n_temp, n_windows, n_freq))
     for ci in range(n_temp):
         cal_ci = therm_cal[ci] if therm_cal and ci < len(therm_cal) else {}
-        noise_kwargs = {
-            k: v
-            for k, v in cal_ci.items()
-            if k in ("e_b", "gain", "b", "beta_1", "beta_2", "T_0", "adc_fs", "adc_bits")
-        }
+        noise_kwargs = {k: v for k, v in cal_ci.items() if k in _NOISE_CAL_KEYS}
         noise_all[ci] = gradT_noise_batch(
             F_const,
             T_means,

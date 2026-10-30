@@ -108,8 +108,17 @@ episode. With a `fit.prior` block, `fp07-cal fit` also fits `t_0` alone with the
 and keeps it unless the full fit is clearly better on held-out error (> 5%), and always over < 5 K of
 range or when no full order is a plausible curve for the bead (dT/dL within 10% of the prior's). It
 flags a result outside the prior's uncertainty over their common range (runbook §5). Without the
-block its output is byte-identical.
+block its output is byte-identical. With or without it, an exported curve must be NTC with a local
+beta `1/(d(1/T_K)/dL)` within 2723-3416 K over its range (`prior.FP07_BETA_K`, the sheet's
+2995-3105 K, +-10%; a test holds it to the sheet), or the channel is refused (#247).
 `fp07-cal registry add` records a fit by inserting text, never re-dumping the hand-edited YAML.
+It takes `first`/`last`/`n_files` from the channel's own `span` in the record (`fp07-cal/2`, #249):
+the TIME THE BEAD WAS ALIVE over every file of the run (the PI's decision; dead = half its 4 s
+windows frozen or on the ADC rail, or < ~10 mK over the file; the span ends at the first 3
+consecutive dead files, with `first_dead` and a NOTE for any later file that passes), never the
+run's or the subsample's;
+`first_kept_pair`/`last_kept_pair` are the calibration's support. An `fp07-cal/1` record is still
+read, with the run's span and a NOTE.
 An entry may carry a `response:` block, the bead's measured FP07 tau (a bead property
 carried with its calibration); `fp07-cal registry response` inserts it as text from an
 `fp07-pair tau` record. Tau is at the pair's own speed `W_ref` and is never converted to
@@ -158,6 +167,25 @@ Facts that are easy to get wrong:
 - Polynomial order is chosen by **held-out** error split on temperature, not by
   in-sample fit or a t-test: `beta_3` can carry a t-statistic of 10 while
   making extrapolation four times worse.
+- **The robust loops clip about the MEDIAN residual** (issue #246; least
+  squares centers the mean, which a minority population drags off the
+  majority). A minority offset by more than 4 sigma is rejected whole, at 5 K
+  or at 50 mK, and so drops out of the stability blocks too: a `WARNING` and
+  the record's `robust_rejection` mark a rejected POPULATION (> 15% of the
+  pairs, or >= half the rejections in profiles that lost over half their
+  pairs, holding >= 0.5% of all). On 11 real deployments: at most 7.5%, 12.7%
+  and 0.44%. The joint geometry fit judges the pairs it cannot fit (no
+  reference gradient) too, or a population there refused the channel.
+- **Bad-buffer thermistor counts are blanked, not paired** (#248). PFile
+  reports bad buffers (and framing-repair slots) but leaves the values;
+  `load_probe_series` sets to NaN what chi's per-thermistor mask marks
+  (`rsi.bad_buffer.probe_masks` on `T*`/`T*_dT*`, with the deconvolution
+  smear; not pressure), and the record's `bad_buffer_samples` counts them.
+  A framing-repair slot stays local, but an RDL MARKER run on a deconvolved
+  thermistor moves PFile's whole-file deconvolution regressions (#259: tens
+  to hundreds of mK file-wide), so that channel is dropped from that file
+  whole (`files_dropped`). v6.0 header-word-16 records only warn in PFile and
+  are still paired.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
   keeps the factory coefficients while its neighbors are fitted, putting one

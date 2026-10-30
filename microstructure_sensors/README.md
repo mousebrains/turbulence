@@ -179,8 +179,8 @@ Where each field comes from, per channel:
 |---|---|
 | `bead` | `coefficients.json` → `channels.<ch>.probe_sn` (if it is a placeholder, identify the bead first) |
 | `instrument.serial`, `.channel`, `.model` | `instrument_sn`, the channel, and the `.p` config's `instrument_info.model` |
-| `first`, `last` | `time_start`, `time_end` (epoch seconds → `YYYY-MM-DDTHH:MM:SSZ`) |
-| `fit.n_files`, `n_profiles`, `n_pairs`, `order`, `lag_s` | `n_fit_files`; `channels.<ch>.n_profiles`, `.n_pairs`, `.order`, `.lag_s` |
+| `first`, `last` | `channels.<ch>.span.time_start`, `.time_end`: when the bead was alive, the first sample of the first file of the run in which its thermistor recorded live data and the last of the last (epoch seconds → `YYYY-MM-DDTHH:MM:SSZ`). An `fp07-cal/1` record has no `span`; the run's `time_start`, `time_end` are used, and `registry add` says so |
+| `fit.n_files`, `n_profiles`, `n_pairs`, `order`, `lag_s` | `channels.<ch>.span.n_files`, the files the bead was alive in (`n_fit_files` from an `fp07-cal/1` record); `channels.<ch>.n_profiles`, `.n_pairs`, `.order`, `.lag_s` |
 | `fit.order_choice` | `auto` when `order_selection` is filled, `prior` when the fit kept the prior's shape (`channels.<ch>.prior.chosen_kind` is `offset`), else `fixed` |
 | `fit.shape_from` | with `order_choice: prior` only: `channels.<ch>.prior.source.deployment`, the entry whose `beta` terms were held fixed (the loader checks they are that entry's exactly) |
 | `fit.held_out_by_order_mK` | `channels.<ch>.order_selection.<n>.held_out_K` × 1000 (the full fits'); required when `order_choice` is `auto`, so the choice can be checked |
