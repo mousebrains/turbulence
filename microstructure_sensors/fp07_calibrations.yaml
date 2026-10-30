@@ -1429,8 +1429,8 @@ calibrations:
       serial: "435"
       channel: T1
       platform: Slocum osu685
-    first: "2025-02-04T07:42:26Z"
-    last: "2025-04-10T15:36:58Z"
+    first: "2025-02-04T01:19:54Z"
+    last: "2025-04-10T22:50:50Z"
     reference:
       kind: SBE-41CP glider CTD
       serial: "9410"
@@ -1440,33 +1440,40 @@ calibrations:
     fit:
       method: glider-ctd
       pooled: true
-      n_files: 103
+      n_files: 797
       n_profiles: 99
       n_pairs: 218535
       order: 2
       order_choice: auto
-      held_out_by_order_mK: {1: 58.02, 2: 12.69, 3: 14.35}
+      held_out_by_order_mK: {1: 57.23, 2: 11.54, 3: 13.25}
       robust: true
-      geometry: {dz_m: 0.665, tau_s: 2.1}
+      geometry: {dz_m: 0.664, tau_s: 2.103}
       lag_s: 7.187
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e, uncommitted changes, source a83ee6eba45b)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 286.654005646593
-      beta_1: 3051.594540784931
-      beta_2: 259738.61892127435
+      t_0: 286.65399504346937
+      beta_1: 3051.5957740234876
+      beta_2: 259796.40259554086
     bridge: {a: -12.3, b: 0.99921, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
-      fit_rms_mK: 5.49
-      held_out_mK: 12.69
+      fit_rms_mK: 5.5
+      held_out_mK: 11.54
       block_sd_mK: 1.39
       n_blocks: 20
     valid_T_degC: [3.61, 27.57]
     notes: >-
       Drift over the deployment, from the streaming pass over all 757 profiles with the
-      fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This
-      record is the rerun after the streaming-pass fix (#237); its coefficients are
-      bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+      fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.17), not significant. The
+      previous record was the rerun after the streaming-pass fix (#237), its
+      coefficients bit-identical to the fit by committed code (git
+      v0.4.0-44-g5f7f1112353e). Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677
+      (after #246 and #249) from the same fit configuration as the previous record: the
+      order is unchanged, and #246's median-centered robust loops moved the curve by at
+      most 0.011 mK over valid_T_degC. Held-out error 11.54 mK (was 12.69 by v0.4.0-44's
+      scoring). first, last and fit.n_files are the time the bead was alive, over every
+      file with a detected profile (PR #262, 2026-10-30); they replaced the fit
+      subsample's span (103 files, 2025-02-04T07:42:26Z to 2025-04-10T15:36:58Z).
     response:
       method: pair-ratio-sp
       partner: T2813
@@ -1520,8 +1527,8 @@ calibrations:
       serial: "435"
       channel: T2
       platform: Slocum osu685
-    first: "2025-02-04T07:42:26Z"
-    last: "2025-04-10T15:36:58Z"
+    first: "2025-02-04T01:19:54Z"
+    last: "2025-04-10T22:50:50Z"
     reference:
       kind: SBE-41CP glider CTD
       serial: "9410"
@@ -1531,35 +1538,42 @@ calibrations:
     fit:
       method: glider-ctd
       pooled: true
-      n_files: 103
+      n_files: 797
       n_profiles: 99
       n_pairs: 218522
       order: 3
       order_choice: auto
-      held_out_by_order_mK: {1: 58.2, 2: 11.94, 3: 10.55}
+      held_out_by_order_mK: {1: 57.37, 2: 10.62, 3: 9.26}
       robust: true
-      geometry: {dz_m: 0.736, tau_s: 2.32}
+      geometry: {dz_m: 0.737, tau_s: 2.327}
       lag_s: 7.232
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e, uncommitted changes, source a83ee6eba45b)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 287.73511226121155
-      beta_1: 3025.154428605665
-      beta_2: 254553.06996862197
-      beta_3: 16278810.34287678
+      t_0: 287.7351166307348
+      beta_1: 3025.1493699109915
+      beta_2: 254534.94241664675
+      beta_3: 17419377.773650225
     bridge: {a: 0.2, b: 0.99943, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
       fit_rms_mK: 5.89
-      held_out_mK: 10.55
+      held_out_mK: 9.26
       block_sd_mK: 2.28
       n_blocks: 20
     valid_T_degC: [3.61, 27.57]
     notes: >-
       Drift over the deployment, from the streaming pass over all 757 profiles with the
       fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over
-      66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the
-      rerun after the streaming-pass fix (#237); its coefficients are bit-identical to
-      the fit by committed code (git v0.4.0-44-g5f7f1112353e).
+      66 days. Order 3 beat order 2 by 1.36 mK of held-out error. The previous record
+      was the rerun after the streaming-pass fix (#237), its coefficients bit-identical
+      to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Regenerated 2026-10-30
+      by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit
+      configuration as the previous record: the order is unchanged, and #246's
+      median-centered robust loops moved the curve by at most 0.012 mK over
+      valid_T_degC. Held-out error 9.26 mK (was 10.55 by v0.4.0-44's scoring). first,
+      last and fit.n_files are the time the bead was alive, over every file with a
+      detected profile (PR #262, 2026-10-30); they replaced the fit subsample's span
+      (103 files, 2025-02-04T07:42:26Z to 2025-04-10T15:36:58Z).
     response:
       method: pair-ratio-sp
       partner: T2811
@@ -1612,8 +1626,8 @@ calibrations:
       serial: "433"
       channel: T1
       platform: Slocum osu684
-    first: "2025-02-04T01:06:01Z"
-    last: "2025-02-10T01:21:19Z"
+    first: "2025-02-04T00:42:20Z"
+    last: "2025-02-10T02:54:58Z"
     reference:
       kind: SBE-41CP glider CTD
       serial: "9421"
@@ -1623,32 +1637,39 @@ calibrations:
     fit:
       method: glider-ctd
       pooled: true
-      n_files: 45
+      n_files: 119
       n_profiles: 19
       n_pairs: 32441
       order: 2
       order_choice: auto
-      held_out_by_order_mK: {1: 48.84, 2: 16.4, 3: 20.94}
+      held_out_by_order_mK: {1: 46.87, 2: 13.05, 3: 18.25}
       robust: true
-      geometry: {dz_m: 0.84, tau_s: 2.94}
+      geometry: {dz_m: 0.847, tau_s: 2.941}
       lag_s: 7.546
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 284.8693675872002
-      beta_1: 3062.1855217366997
-      beta_2: 301056.8535023441
+      t_0: 284.8695211937109
+      beta_1: 3062.1687164033974
+      beta_2: 300078.5770962898
     bridge: {a: -2.9, b: 0.99939, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
-      fit_rms_mK: 5.31
-      held_out_mK: 16.4
-      block_sd_mK: 1.75
+      fit_rms_mK: 5.32
+      held_out_mK: 13.05
+      block_sd_mK: 1.73
       n_blocks: 3
     valid_T_degC: [5.04, 26.12]
     flags: [short]
     notes: >-
       Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
       includes the climbs after it. Only 3 blocks, too few to test for drift.
+      Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from
+      the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e):
+      the order is unchanged, and #246's median-centered robust loops moved the curve by
+      at most 0.162 mK over valid_T_degC. Held-out error 13.05 mK (was 16.4 by
+      v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive,
+      over every file with a detected profile (PR #262, 2026-10-30); they replaced the
+      fit subsample's span (45 files, 2025-02-04T01:06:01Z to 2025-02-10T01:21:19Z).
     response:
       method: pair-ratio-sp
       partner: T2810
@@ -1699,8 +1720,8 @@ calibrations:
       serial: "433"
       channel: T2
       platform: Slocum osu684
-    first: "2025-02-04T01:06:01Z"
-    last: "2025-02-10T01:21:19Z"
+    first: "2025-02-04T00:42:20Z"
+    last: "2025-02-10T02:54:58Z"
     reference:
       kind: SBE-41CP glider CTD
       serial: "9421"
@@ -1710,25 +1731,25 @@ calibrations:
     fit:
       method: glider-ctd
       pooled: true
-      n_files: 45
+      n_files: 119
       n_profiles: 19
       n_pairs: 32436
       order: 2
       order_choice: auto
-      held_out_by_order_mK: {1: 49.82, 2: 21.55, 3: 26.41}
+      held_out_by_order_mK: {1: 47.3, 2: 16.02, 3: 22.82}
       robust: true
-      geometry: {dz_m: 0.86, tau_s: 2.92}
+      geometry: {dz_m: 0.859, tau_s: 2.909}
       lag_s: 7.622
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 281.2492818916516
-      beta_1: 3013.9613103994766
-      beta_2: 299877.04652461346
+      t_0: 281.24929135249204
+      beta_1: 3013.956213971763
+      beta_2: 299766.6355794886
     bridge: {a: -6.7, b: 0.99893, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
-      fit_rms_mK: 6.96
-      held_out_mK: 21.55
+      fit_rms_mK: 6.98
+      held_out_mK: 16.02
       block_sd_mK: 5.37
       n_blocks: 3
     valid_T_degC: [5.04, 26.12]
@@ -1737,6 +1758,13 @@ calibrations:
       Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit
       includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the
       failure; that episode is inside the fit and inflates the block scatter.
+      Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from
+      the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e):
+      the order is unchanged, and #246's median-centered robust loops moved the curve by
+      at most 0.015 mK over valid_T_degC. Held-out error 16.02 mK (was 21.55 by
+      v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive,
+      over every file with a detected profile (PR #262, 2026-10-30); they replaced the
+      fit subsample's span (45 files, 2025-02-04T01:06:01Z to 2025-02-10T01:21:19Z).
     response:
       method: pair-ratio-sp
       partner: T2809
@@ -1798,25 +1826,25 @@ calibrations:
     fit:
       method: glider-ctd
       pooled: true
-      n_files: 154
+      n_files: 592
       n_profiles: 152
       n_pairs: 413439
       order: 2
       order_choice: auto
-      held_out_by_order_mK: {1: 86.61, 2: 17.78, 3: 33.57}
+      held_out_by_order_mK: {1: 84.8, 2: 16.12, 3: 33.36}
       robust: true
-      geometry: {dz_m: 0.512, tau_s: 1.43}
+      geometry: {dz_m: 0.509, tau_s: 1.433}
       lag_s: 6.905
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 284.1149145591465
-      beta_1: 3054.870104448486
-      beta_2: 268522.9247909007
+      t_0: 284.11488051517375
+      beta_1: 3054.886782555738
+      beta_2: 268683.36679462274
     bridge: {a: -12.3, b: 0.99921, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
-      fit_rms_mK: 8.0
-      held_out_mK: 17.78
+      fit_rms_mK: 7.97
+      held_out_mK: 16.12
       block_sd_mK: 4.38
       n_blocks: 12
     valid_T_degC: [3.5, 30.46]
@@ -1825,7 +1853,14 @@ calibrations:
       Files A685_0005-0618 only: the fit stops at 2023-08-05, when the nose flooded. It
       includes a +8 to +16 mK episode, 2023-06-19 to 07-01, while the EM channel was
       pegged (one block offset of -11 mK). Profiles gated on fall rate only, because
-      U_EM was unreliable in 2023.
+      U_EM was unreliable in 2023. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677
+      (after #246 and #249) from the same fit configuration as the previous record (git
+      v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered
+      robust loops moved the curve by at most 0.068 mK over valid_T_degC. Held-out error
+      16.12 mK (was 17.78 by v0.4.0-44's scoring). fit.n_files is the number of files
+      the bead was alive in, over every file with a detected profile (PR #262,
+      2026-10-30), replacing the fit subsample's 154; first and last were already the
+      alive span.
 
   - bead: T2245
     deployment: ARCTERX-2023 Interior
@@ -1850,27 +1885,34 @@ calibrations:
       n_pairs: 287052
       order: 2
       order_choice: auto
-      held_out_by_order_mK: {1: 79.96, 2: 11.03, 3: 20.37}
+      held_out_by_order_mK: {1: 79.14, 2: 9.66, 3: 18.53}
       robust: true
-      geometry: {dz_m: 0.46, tau_s: 1.18}
+      geometry: {dz_m: 0.462, tau_s: 1.187}
       lag_s: 6.535
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 281.1953031328784
-      beta_1: 3017.6049842750162
-      beta_2: 273292.7994601109
+      t_0: 281.195321117841
+      beta_1: 3017.5953905969354
+      beta_2: 273176.2295449489
     bridge: {a: 0.2, b: 0.99943, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
-      fit_rms_mK: 5.47
-      held_out_mK: 11.03
-      block_sd_mK: 1.88
+      fit_rms_mK: 5.48
+      held_out_mK: 9.66
+      block_sd_mK: 1.89
       n_blocks: 12
     valid_T_degC: [3.51, 29.33]
     flags: [screened]
     notes: >-
       Files A685_0005-0157 only: from 2023-06-12 17:17Z T2 sat on the bridge rail.
-      Profiles gated on fall rate only, because U_EM was unreliable in 2023.
+      Profiles gated on fall rate only, because U_EM was unreliable in 2023. Regenerated
+      2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit
+      configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is
+      unchanged, and #246's median-centered robust loops moved the curve by at most
+      0.034 mK over valid_T_degC. Held-out error 9.66 mK (was 11.03 by v0.4.0-44's
+      scoring). first, last and fit.n_files are the time the bead was alive, over every
+      file with a detected profile (PR #262, 2026-10-30), and equal the previous
+      record's.
 
   - bead: T2239
     deployment: ARCTERX-2023 Interior
@@ -1895,21 +1937,21 @@ calibrations:
       n_pairs: 172658
       order: 3
       order_choice: auto
-      held_out_by_order_mK: {1: 75.07, 2: 14.5, 3: 12.28}
+      held_out_by_order_mK: {1: 74.69, 2: 13.75, 3: 11.62}
       robust: true
-      geometry: {dz_m: 0.512, tau_s: 1.89}
+      geometry: {dz_m: 0.511, tau_s: 1.889}
       lag_s: 6.89
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 285.74701111613126
-      beta_1: 3042.08856705106
-      beta_2: 301514.8101183117
-      beta_3: -4356964.255649819
+      t_0: 285.74701003352993
+      beta_1: 3042.090184084749
+      beta_2: 301488.3849501696
+      beta_3: -4374355.380142139
     bridge: {a: -2.9, b: 0.99939, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
       fit_rms_mK: 5.43
-      held_out_mK: 12.28
+      held_out_mK: 11.62
       block_sd_mK: 1.83
       n_blocks: 12
     valid_T_degC: [3.81, 29.18]
@@ -1919,6 +1961,13 @@ calibrations:
       temperature lag (+6.9 s), which would make the CTD's response negative, so that
       clock estimate is unreliable. The temperature lag itself passed the sharpness
       gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023.
+      Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from
+      the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e):
+      the order is unchanged, and #246's median-centered robust loops moved the curve by
+      at most 0.006 mK over valid_T_degC. Held-out error 11.62 mK (was 12.28 by
+      v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive,
+      over every file with a detected profile (PR #262, 2026-10-30), and equal the
+      previous record's.
 
   - bead: T2240
     deployment: ARCTERX-2023 Interior
@@ -1943,21 +1992,21 @@ calibrations:
       n_pairs: 172658
       order: 3
       order_choice: auto
-      held_out_by_order_mK: {1: 75.49, 2: 15.34, 3: 12.73}
+      held_out_by_order_mK: {1: 75.11, 2: 14.61, 3: 11.58}
       robust: true
-      geometry: {dz_m: 0.62, tau_s: 2.41}
+      geometry: {dz_m: 0.619, tau_s: 2.406}
       lag_s: 6.892
       reference_pole_s: 0.7
-      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-44-g5f7f1112353e)"
+      software_version: "microstructure-tpw 0.4.0 (git v0.4.0-57-gdaee18c1b677)"
     coefficients:
-      t_0: 286.8339601245492
-      beta_1: 3058.7017690864777
-      beta_2: 307728.3594540873
-      beta_3: -3036194.6910411096
+      t_0: 286.833959152977
+      beta_1: 3058.7034509135365
+      beta_2: 307704.1276162944
+      beta_3: -3044116.8742521936
     bridge: {a: -6.7, b: 0.99893, g: 6.0, e_b: 0.6828, adc_fs: 4.096, adc_bits: 16}
     uncertainty:
       fit_rms_mK: 5.67
-      held_out_mK: 12.73
+      held_out_mK: 11.58
       block_sd_mK: 1.63
       n_blocks: 12
     valid_T_degC: [3.81, 29.18]
@@ -1967,3 +2016,10 @@ calibrations:
       temperature lag (+6.9 s), which would make the CTD's response negative, so that
       clock estimate is unreliable. The temperature lag itself passed the sharpness
       gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023.
+      Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from
+      the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e):
+      the order is unchanged, and #246's median-centered robust loops moved the curve by
+      at most 0.006 mK over valid_T_degC. Held-out error 11.58 mK (was 12.73 by
+      v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive,
+      over every file with a detected profile (PR #262, 2026-10-30), and equal the
+      previous record's.
