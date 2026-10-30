@@ -292,6 +292,10 @@ DEFAULTS: dict[str, dict] = {
         # epsilon and should not seed chi from it.
         "fit_method": "iterative",  # Only used when use_epsilon=False
         "spectrum_model": "kraichnan",
+        "first_bin": 2,  # Lowest FFT bin chi uses, DC = bin 0
+        # (chi.chi.FIRST_BIN, issue #191). At 1,
+        # the band before the key existed, it is
+        # dropped from the canonical view.
         "salinity": None,
         "mixing": True,  # Derived mixing quantities (N2, dTdz,
         # K_T, Gamma, K_rho) on the chi grid.
@@ -637,6 +641,16 @@ class _PerturbConfigManager(ConfigManager):
                     del mapping[key]
         return mapping
 
+    def _canonicalize_section(self, section: str, params: dict) -> dict:
+        # chi.first_bin = 1 is the band from before the key existed, so it is
+        # left out of the HASH (the default, 2, is a different band and changes
+        # it). Unlike the keys above it stays in the written config.yaml: its
+        # absence there would read back as 2.
+        out = super()._canonicalize_section(section, params)
+        if section == "chi" and out.get("first_bin") == 1:
+            out = {k: v for k, v in out.items() if k != "first_bin"}
+        return out
+
     def validate_config(self, config: dict) -> None:
         """Structural validation plus fs-independent window-duration checks.
 
@@ -716,6 +730,17 @@ class _PerturbConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        chi = config.get("chi") or {}
+        first_bin = chi.get("first_bin")
+        if first_bin is not None:
+            from odas_tpw.chi.chi import check_first_bin_fits, validate_first_bin
+
+            first_bin = validate_first_bin(first_bin, where="chi.first_bin")
+            # Against an explicit fft_length here; an fft_sec window is in
+            # samples only at a file's rate, so chi checks that when it runs.
+            fft = chi.get("fft_length")
+            if isinstance(fft, int) and not isinstance(fft, bool) and fft > 0:
+                check_first_bin_fits(first_bin, fft // 2 + 1, where="chi.first_bin")
         # stratification.sort / dTdz_source pick a code path by membership, so a
         # typo would otherwise fall through to a default silently.
         strat = config.get("stratification") or {}
@@ -1626,6 +1651,10 @@ chi:
   fit_method: "iterative" # Method 2 fitting: iterative or mle (ignored if
                           # use_epsilon=true)
   spectrum_model: "kraichnan"  # theoretical spectrum: batchelor or kraichnan
+  first_bin: 2            # lowest FFT bin chi uses (DC = 0). The per-segment
+                          # linear detrend leaves bin 1 ~30% low on a red
+                          # spectrum (issue #191); 1 reproduces a product
+                          # made before bin 1 was dropped
   salinity: null          # viscosity salinity [PSU]: null = fixed 35; a
                           # number = that fixed S; "measured" = per-profile
                           # from JAC_C/JAC_T/P (TEOS-10); "hotel" (or

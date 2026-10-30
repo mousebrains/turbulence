@@ -16,9 +16,13 @@ from typing import NamedTuple
 import numpy as np
 
 from odas_tpw.chi.chi import (
+    FIRST_BIN,
     _chi_from_epsilon,
     _iterative_fit,
     _mle_fit_kB,
+    _usable_bins,
+    check_first_bin_fits,
+    validate_first_bin,
 )
 from odas_tpw.chi.fp07 import fp07_double_pole, fp07_transfer
 from odas_tpw.chi.fp07_pair import signal_weighted
@@ -63,6 +67,10 @@ class L4ChiData:
     # A diagnostic only: nothing gates on it. None only from a caller that
     # built the dataclass itself.
     mad_shape: np.ndarray | None = None
+    # The lowest FFT bin the estimates used (chi.chi.FIRST_BIN, issue #191),
+    # so a writer can record it. None only from a caller that built the
+    # dataclass itself.
+    first_bin: int | None = None
 
     @property
     def n_spectra(self) -> int:
@@ -100,6 +108,7 @@ def _process_l4_chi(
     method_name: str,
     f_AA: float,
     mask_bad_buffers: bool = True,
+    first_bin: int = FIRST_BIN,
 ) -> L4ChiData:
     """Shared L4 chi processing loop.
 
@@ -115,6 +124,9 @@ def _process_l4_chi(
         "epsilon" or "fit".
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
+    first_bin : int
+        Lowest FFT bin chi uses (:data:`odas_tpw.chi.chi.FIRST_BIN`). It also
+        limits the S/N running mean that weights a measured response factor.
     """
     n_spec = l3_chi.n_spectra
     n_gradt = l3_chi.n_gradt
@@ -168,7 +180,11 @@ def _process_l4_chi(
             # dominated (fp07_pair.signal_weighted).
             fac = l3_chi.response_factor[ci] if ci < len(l3_chi.response_factor) else None
             if fac is not None:
-                e = signal_weighted(fac(l3_chi.freq, W), spec_obs, noise_K)
+                # Its S/N running mean sees only the bins chi may use, so bin 1
+                # cannot reach a neighbor's weight. At first_bin 1 every bin
+                # (DC too) enters, as before first_bin existed.
+                usable = _usable_bins(K, first_bin) if first_bin > 1 else None
+                e = signal_weighted(fac(l3_chi.freq, W), spec_obs, noise_K, usable=usable)
                 spec_obs = spec_obs / e
                 noise_K = noise_K / e
 
@@ -269,6 +285,7 @@ def _process_l4_chi(
         method=method_name,
         chi_qc_fallback=chi_res.qc_fallback,
         mad_shape=mad_shape_out,
+        first_bin=int(first_bin),
     )
 
 
@@ -279,6 +296,7 @@ def process_l4_chi_epsilon(
     spectrum_model: str = "kraichnan",
     f_AA: float = 98.0,
     mask_bad_buffers: bool = True,
+    first_bin: int = FIRST_BIN,
 ) -> L4ChiData:
     """Compute chi from known epsilon (Method 1).
 
@@ -292,11 +310,16 @@ def process_l4_chi_epsilon(
         'batchelor' or 'kraichnan'.
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
+    first_bin : int
+        Lowest FFT bin chi uses, DC = bin 0 (:data:`odas_tpw.chi.chi.FIRST_BIN`,
+        issue #191). 1 reproduces a product from before bin 1 was dropped.
 
     Returns
     -------
     L4ChiData
     """
+    first_bin = validate_first_bin(first_bin)
+    check_first_bin_fits(first_bin, l3_chi.n_wavenumber)
     # Pre-compute time matching
     epsi_final = l4_diss.epsi_final
     epsi_times = _to_float64_seconds(l4_diss.time)
@@ -331,6 +354,7 @@ def process_l4_chi_epsilon(
             spectrum_model,
             kappa_T,
             _dof_at(l3_chi, j),
+            first_bin=first_bin,
         )
         return (
             er.chi,
@@ -343,7 +367,7 @@ def process_l4_chi_epsilon(
             er.mad_shape,
         )
 
-    return _process_l4_chi(l3_chi, _chi_eps_func, "epsilon", f_AA, mask_bad_buffers)
+    return _process_l4_chi(l3_chi, _chi_eps_func, "epsilon", f_AA, mask_bad_buffers, first_bin)
 
 
 def process_l4_chi_fit(
@@ -353,6 +377,7 @@ def process_l4_chi_fit(
     fit_method: str = "iterative",
     f_AA: float = 98.0,
     mask_bad_buffers: bool = True,
+    first_bin: int = FIRST_BIN,
 ) -> L4ChiData:
     """Compute chi by spectral fitting (Method 2).
 
@@ -366,11 +391,16 @@ def process_l4_chi_fit(
         'iterative' (Peterson & Fer 2014) or 'mle' (Ruddick et al. 2000).
     f_AA : float
         Anti-aliasing filter cutoff [Hz].
+    first_bin : int
+        Lowest FFT bin chi uses, DC = bin 0 (:data:`odas_tpw.chi.chi.FIRST_BIN`,
+        issue #191). 1 reproduces a product from before bin 1 was dropped.
 
     Returns
     -------
     L4ChiData
     """
+    first_bin = validate_first_bin(first_bin)
+    check_first_bin_fits(first_bin, l3_chi.n_wavenumber)
 
     def _chi_fit_func(j, _ci, spec_obs, noise_K, K, W, nu, kappa_T, tau0, H2, _h2, f_AA_eff):
         if fit_method == "iterative":
@@ -387,9 +417,11 @@ def process_l4_chi_fit(
                 spectrum_model,
                 kappa_T,
                 _dof_at(l3_chi, j),
+                first_bin=first_bin,
             )
         else:
-            mask = (K > 0) & (f_AA_eff / W >= K)
+            # The MLE's seed chi, over the same bins the fit may use.
+            mask = _usable_bins(K, first_bin) & (f_AA_eff / W >= K)
             if np.sum(mask) < 3:
                 return None
             chi_obs = (
@@ -422,6 +454,7 @@ def process_l4_chi_fit(
                 spectrum_model,
                 kappa_T,
                 _dof_at(l3_chi, j),
+                first_bin=first_bin,
             )
             kB_prev = result.kB
             for _ in range(2):
@@ -441,6 +474,7 @@ def process_l4_chi_fit(
                     spectrum_model,
                     kappa_T,
                     _dof_at(l3_chi, j),
+                    first_bin=first_bin,
                 )
                 if (
                     np.isfinite(result.kB)
@@ -461,7 +495,7 @@ def process_l4_chi_fit(
             result.mad_shape,
         )
 
-    return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA, mask_bad_buffers)
+    return _process_l4_chi(l3_chi, _chi_fit_func, "fit", f_AA, mask_bad_buffers, first_bin)
 
 
 # Chi spectral-QC thresholds shared by chi_final and the mixing products, so the

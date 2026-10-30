@@ -214,14 +214,20 @@ class TestChiParity:
     (they are the bead's R(T), not the electronics; issue #245,
     tests/test_noise_model_insitu_coeffs.py).
 
-    Discrimination check (measured on this fixture, fft_length=512): with
-    the m8 attrs max |log10 ratio| ~ 6e-4; with the generic defaults
-    (pre-m8 files) max ~ 1.5e-2, p95 ~ 8e-3, but median only ~ 4e-5 — most
-    windows are strong-signal, where the noise-floor coefficients barely
-    matter. The 5e-3 MAX bound is therefore the discriminating assertion;
-    the 1e-3 median bound passes in BOTH cases and only guards gross
-    regressions. Do not loosen the max bound expecting the median to
-    backstop it (review F3).
+    Discrimination check (measured on this fixture, fft_length=512, chi from
+    bin 2 up, issue #191): with the m8 attrs p95 |log10 ratio| ~ 4e-4; with
+    the generic defaults (pre-m8 files) p95 ~ 8e-3, but median only ~ 4e-5
+    in both — most windows are strong-signal, where the noise-floor
+    coefficients barely matter. What the generic defaults do is move the
+    Method-2 fit onto a neighboring point of the MLE's fine kB grid in 6 of
+    42 windows (1 of 42 with the m8 attrs, on spectra that agree to 1e-5),
+    and one grid step moves chi by up to ~1.5% (log10 ~ 7e-3). So the MAX no
+    longer separates the two (m8 6.6e-3, generic 8.7e-3; with bin 1 in the
+    band it was 6e-4 and 1.5e-2, review F3), and the 2e-3 P95 bound is the
+    discriminating assertion. The 1e-2 max bound allows one grid step; the
+    1e-3 median bound passes in BOTH cases and only guards gross
+    regressions. Do not loosen the p95 bound expecting the median to
+    backstop it.
     """
 
     def test_chi_parity(self, prof_nc):
@@ -243,4 +249,5 @@ class TestChiParity:
         assert ok.sum() >= 20  # enough windows for the statistics to mean much
         ratio = np.abs(np.log10(chi_nc[ok] / chi_p[ok]))
         assert np.median(ratio) < 1e-3
-        assert ratio.max() < 5e-3
+        assert np.percentile(ratio, 95) < 2e-3
+        assert ratio.max() < 1e-2

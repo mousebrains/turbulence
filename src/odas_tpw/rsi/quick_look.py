@@ -60,7 +60,7 @@ def _compute_chi_spectra(
     methods_results is a dict keyed by method name ("M1", "M2-MLE", "M2-Iter"),
     each mapping to a list of per-probe (batch_spec, chi_val, kB_val) tuples.
     """
-    from odas_tpw.chi.chi import _mle_fit_kB
+    from odas_tpw.chi.chi import _mle_fit_kB, _usable_bins
     from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer
     from odas_tpw.chi.fp07 import gradT_noise as _gradT_noise
     from odas_tpw.scor160.ocean import kappa_T as _kappa_T_TSP
@@ -144,7 +144,8 @@ def _compute_chi_spectra(
         # M2-MLE: call _mle_fit_kB directly with gradient spectrum from shared code
         grad = obs_spectra[ci] if ci < len(obs_spectra) else np.full(n_freq, np.nan)
         dg_i = diff_gains[ci] if ci < len(diff_gains) else 0.94
-        valid = np.isfinite(grad) & (grad > 0) & (K > 0) & (K_AA_chi >= K)
+        # The MLE's seed chi, over the bins production chi may use (chi.FIRST_BIN).
+        valid = np.isfinite(grad) & (grad > 0) & _usable_bins(K) & (K_AA_chi >= K)
         if np.sum(valid) >= 3:
             chi_obs = max(6 * kappa_T_ql * np.trapezoid(grad[valid], K[valid]), 1e-10)
             # Pre-compute noise/H2 for _mle_fit_kB

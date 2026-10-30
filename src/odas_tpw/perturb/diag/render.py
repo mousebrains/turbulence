@@ -444,7 +444,15 @@ def _fp07_h2(
         if obs is not None and noise is not None:
             from odas_tpw.chi.fp07_pair import signal_weighted
 
-            e = signal_weighted(e, obs, noise)
+            # chi's S/N running mean sees only the bins from first_bin up (a
+            # product without the attr used bin 1 and the whole grid).
+            first_bin = int(attrs.get("first_bin", 1))
+            usable = None
+            if first_bin > 1:
+                from odas_tpw.chi.chi import _usable_bins
+
+                usable = _usable_bins(np.asarray(K, dtype=float), first_bin)
+            e = signal_weighted(e, obs, noise, usable=usable)
         h2 = h2 * e
     # A bead's slow response path (chi.fp07_slow), recorded per probe only where
     # it was applied. chi divided raw S and N by it in every bin (unweighted),

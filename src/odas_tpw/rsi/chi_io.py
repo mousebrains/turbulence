@@ -27,6 +27,7 @@ import numpy.typing as npt
 import xarray as xr
 
 from odas_tpw._version_info import stamp_provenance
+from odas_tpw.chi.chi import FIRST_BIN
 from odas_tpw.rsi.bad_buffer import UNKNOWN_ATTR
 from odas_tpw.rsi.channels import _is_infinity, config_number
 from odas_tpw.rsi.dissipation import DOF_NUTTALL
@@ -151,6 +152,7 @@ def _compute_chi(
     fp07_tau_scale: Mapping[str, float] | None = None,
     fp07_response: Sequence[Any] | None = None,
     fp07_slow_response: Mapping[str, Any] | None = None,
+    first_bin: int = FIRST_BIN,
     _pre_loaded: dict[str, Any] | None = None,
 ) -> list[xr.Dataset]:
     """Compute chi from temperature gradient spectra (internal, no deprecation warning).
@@ -215,6 +217,12 @@ def _compute_chi(
     ``chi_final`` is formed, so a contaminated probe cannot be averaged back
     in. ``bad_buffer_fraction`` and ``interpolated_fraction`` record both
     either way.
+
+    ``first_bin`` is the lowest FFT bin any chi estimate uses, DC = bin 0
+    (:data:`odas_tpw.chi.chi.FIRST_BIN`; issue #191: the per-segment linear
+    detrend biases bin 1). ``1`` reproduces a product from before bin 1 was
+    dropped. A value other than 1 is recorded in the ``first_bin`` attr, so a
+    product without it used bin 1.
 
     ``_pre_loaded`` is a private hook accepting the dict produced by
     :func:`_load_therm_channels` (i.e. channels + ``therm`` + ``diff_gains`` +
@@ -456,6 +464,7 @@ def _compute_chi(
                 spectrum_model=spectrum_model,
                 f_AA=f_AA,
                 mask_bad_buffers=mask_bad_buffers,
+                first_bin=first_bin,
             )
         else:
             l4_chi = process_l4_chi_fit(
@@ -464,6 +473,7 @@ def _compute_chi(
                 fit_method=fit_method,
                 f_AA=f_AA,
                 mask_bad_buffers=mask_bad_buffers,
+                first_bin=first_bin,
             )
 
         # Goodman DOF loss (#131 m9): each coherently-removed vibration signal
@@ -496,6 +506,11 @@ def _compute_chi(
             for name in ("bad_buffer_fraction", "interpolated_fraction"):
                 ds[name] = ds[name].copy(data=np.full(ds[name].shape, np.nan))
         ds.attrs.update(data["metadata"])
+        # The chi band's lowest FFT bin (issue #191). Only a value other than 1
+        # is written, so a product from before the key, or one reproducing it,
+        # is unchanged and the attr's absence means bin 1.
+        if first_bin != 1:
+            ds.attrs["first_bin"] = int(first_bin)
         # Per-thermistor FP07 time-constant multipliers, recorded per channel so
         # a chi file is traceable to the tau that produced it without the
         # config. A different tau IS a different chi, and the values are

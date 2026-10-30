@@ -67,6 +67,10 @@ DEFAULTS: dict[str, dict] = {
         "f_AA": 98.0,
         "fit_method": "iterative",
         "spectrum_model": "kraichnan",
+        # Lowest FFT bin chi uses, DC = bin 0 (chi.chi.FIRST_BIN, issue #191).
+        # At 1, the band before the key existed, it is dropped from the
+        # canonical view so those hashes are unchanged.
+        "first_bin": 2,
         "salinity": None,
         "temperature": "auto",
         "conductivity": "auto",
@@ -100,6 +104,16 @@ class _RsiConfigManager(ConfigManager):
             return {k: v for k, v in mapping.items() if k not in inert or v != inert[k]}
         return mapping
 
+    def _canonicalize_section(self, section: str, params: dict) -> dict:
+        # chi.first_bin = 1 (the band from before the key existed) is left out
+        # of the HASH only, so those runs keep their output directory. It stays
+        # in the written config.yaml: there its absence would read back as the
+        # default, 2, a different band.
+        out = super()._canonicalize_section(section, params)
+        if section == "chi" and out.get("first_bin") == 1:
+            out = {k: v for k, v in out.items() if k != "first_bin"}
+        return out
+
     def validate_config(self, config: dict) -> None:
         """Unknown sections/keys, plus the epsilon despike/record-locked values.
 
@@ -110,6 +124,15 @@ class _RsiConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        chi = config.get("chi") or {}
+        first_bin = chi.get("first_bin")
+        if first_bin is not None:
+            from odas_tpw.chi.chi import check_first_bin_fits, validate_first_bin
+
+            first_bin = validate_first_bin(first_bin, where="[chi] first_bin")
+            fft = chi.get("fft_length") or DEFAULTS["chi"]["fft_length"]
+            if isinstance(fft, int) and not isinstance(fft, bool) and fft > 0:
+                check_first_bin_fits(first_bin, fft // 2 + 1, where="[chi] first_bin")
         slow = (config.get("chi") or {}).get("fp07_slow_response")
         if slow is not None:
             from odas_tpw.chi.fp07_slow import parse_slow_response
@@ -202,6 +225,10 @@ chi:
   f_AA: 98.0            # anti-aliasing filter cutoff [Hz]
   fit_method: iterative # Method 2 fitting: iterative or mle
   spectrum_model: kraichnan  # theoretical spectrum: batchelor or kraichnan
+  first_bin: 2          # lowest FFT bin chi uses (DC = 0). The per-segment
+                        # linear detrend leaves bin 1 ~30% low on a red
+                        # spectrum (issue #191); 1 reproduces a product
+                        # made before bin 1 was dropped
   salinity: null        # PSU value, or "measured" (JAC/selected C+T) (null = 35, fixed S)
   temperature: auto     # reference temperature for viscosity/kappa_T: auto =
                         # first plausible of T1..Tn, T, JAC_T; a channel name

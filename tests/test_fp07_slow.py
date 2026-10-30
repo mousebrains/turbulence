@@ -255,15 +255,21 @@ class TestChiRecoversTruth:
         # not vacuous: uncorrected, the bead reads ~20-30% low
         assert _med_ln(unc.chi[1], chi_true) < b - 0.2
         if method == "fit":
-            # Method 2 fits kB on the reddened spectrum: kB and epsilon_T come
-            # back too.
+            # Method 2 fits kB on the corrected spectrum: kB and epsilon_T match
+            # the healthy bead's to one step of the MLE's fine kB grid, on which
+            # their medians are quantized (~1.5% in kB: ln 0.014 in kB, 0.055 in
+            # epsilon_T ~ kB^4; seeds 1-5 land 0 or 1 step apart). There is no
+            # reliable "uncorrected is off" check for kB: with bin 1 out of the
+            # band (issue #191) the first bin used is 4 Hz, where this path's
+            # |H_slow|^2 is already 0.79 of an asymptotic 0.77, a nearly flat
+            # factor that chi's amplitude carries (the chi check above), not
+            # the spectral shape kB is fitted to.
             kb_ref = _med_ln(base.kB[1], np.full_like(chi_true, kB))
             eps_ref = _med_ln(base.epsilon_T[1], np.full_like(chi_true, EPS))
             assert _med_ln(cor.kB[1], np.full_like(chi_true, kB)) == pytest.approx(kb_ref,
-                                                                                   abs=0.01)
+                                                                                   abs=0.02)
             assert _med_ln(cor.epsilon_T[1], np.full_like(chi_true, EPS)) == pytest.approx(
-                eps_ref, abs=0.04)
-            assert _med_ln(unc.epsilon_T[1], np.full_like(chi_true, EPS)) < eps_ref - 0.04
+                eps_ref, abs=0.08)
 
     def test_method2_mle_divides_once(self, synth):
         """The MLE path takes the factor once: applied twice, chi reads high."""

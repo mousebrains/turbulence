@@ -998,7 +998,7 @@ class TestChiEdgeCases:
         The original F1 regression test only exercised the 0-points case, so an
         off-by-one (<3 vs <=3) would have slipped through (2026-07-03 review).
         """
-        from odas_tpw.chi.chi import _chi_from_epsilon
+        from odas_tpw.chi.chi import FIRST_BIN, _chi_from_epsilon
         from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         speed, fs, n_freq = 0.7, 512, 257
@@ -1010,7 +1010,8 @@ class TestChiEdgeCases:
         f_AA = 98.0
         K_AA = f_AA / speed
         args = (K, 1e-7, 1.2e-6, noise_K, H2, tau0, fp07_transfer, f_AA, speed, "batchelor")
-        inband = np.where((K > 0) & (K <= K_AA))[0]
+        # The gate counts the bins chi may use: bin FIRST_BIN (2) and up.
+        inband = np.where((np.arange(K.size) >= FIRST_BIN) & (K <= K_AA))[0]
 
         def craft(npts):
             spec = noise_K.copy()
@@ -1150,9 +1151,11 @@ class TestChiEdgeCases:
         noise = np.ones(n) * 10.0
         spec = np.ones(n) * 1.0  # well below 2 * noise
         mask = _valid_wavenumber_mask(spec, noise, K, K_AA=200.0)
-        # Fallback: K > 0 and K <= K_AA
-        assert np.sum(mask) > 0
-        assert mask[0]  # K[0] = 0.5 > 0
+        # Fallback: every usable bin with K <= K_AA. This grid has no DC, so
+        # K[0] is its lowest positive bin, bin 1, which chi never uses.
+        assert not mask[0]
+        assert mask[1:].all()
+        assert _valid_wavenumber_mask(spec, noise, K, K_AA=200.0, first_bin=1).all()
 
 
 class TestEpsilonDsToL4Data:
@@ -1789,7 +1792,7 @@ class TestIterativeFitBranches:
         fix (the old stale chi differs by ~0.14%).
         """
         from odas_tpw.chi.batchelor import batchelor_grad, batchelor_kB
-        from odas_tpw.chi.chi import KAPPA_T, _iterative_fit, _variance_correction
+        from odas_tpw.chi.chi import FIRST_BIN, KAPPA_T, _iterative_fit, _variance_correction
         from odas_tpw.chi.fp07 import fp07_tau, fp07_transfer, gradT_noise
 
         nu = 1.2e-6
@@ -1829,7 +1832,7 @@ class TestIterativeFitBranches:
         kB = result.kB
         k_u = result.K_max
         k_star = 0.04 * kB * np.sqrt(KAPPA_T / nu)
-        k_l = max(K[1], 3 * k_star)
+        k_l = max(K[FIRST_BIN], 3 * k_star)
         mr = (k_l <= K) & (k_u >= K)
         chi_band = 6 * KAPPA_T * np.trapezoid(np.maximum(spec_obs[mr] - noise_K[mr], 0), K[mr])
         corr = _variance_correction(kB, k_u, speed, tau0, fp07_transfer, batchelor_grad, K_min=k_l)

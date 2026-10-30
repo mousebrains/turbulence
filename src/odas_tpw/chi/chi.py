@@ -276,6 +276,98 @@ def mad_shape_floor(dof: float) -> float:
 # Shared wavenumber masking helper
 # ---------------------------------------------------------------------------
 
+# The lowest FFT bin any chi estimate uses, counting DC as bin 0 (issue #191
+# step 2). Every FFT segment is LINEARLY detrended, and a straight line is not
+# orthogonal to bin 1's one-cycle sinusoid, so the detrend removes part of bin
+# 1's own variance while leakage from its neighbors adds some back: bin 1 reads
+# the local spectral SLOPE as much as the level. Through csd_matrix_batch (fft
+# 512, long records) it reads ln -0.33 on a flat spectrum, +0.22 on one rising
+# as k and -0.59 on one falling as 1/k. At real window geometry with the
+# low-wavenumber variance real spectra carry, it is low by a median ln 0.36 /
+# 0.38 / 0.31 (fft_length 256 / 512 / 1024) with bins 2-8 within 3%; with
+# Kraichnan + noise alone, 2-5% low. So bin 1 does not estimate the spectrum at
+# its own wavenumber. ``chi.first_bin: 1`` restores the earlier band (bin 1 and
+# up) to reproduce a product made before the change.
+FIRST_BIN = 2
+
+
+def validate_first_bin(value: object, where: str = "chi.first_bin") -> int:
+    """*value* as the lowest FFT bin chi may use (an int >= 1), or ValueError.
+
+    Bin 0 is DC and never usable. A bool is refused although Python counts it
+    as an int (``True`` would silently mean bin 1), and so is a float, even a
+    whole one: a bin is an index.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{where}: must be an integer FFT bin >= 1, got {value!r}")
+    if value < 1:
+        raise ValueError(
+            f"{where}: must be >= 1 (bin 0 is DC, which chi never uses), got {value}"
+        )
+    return int(value)
+
+
+# The fewest bins any chi path can work with (Method 1's band, fom, the detection
+# gate); Method 2 needs 6.
+_MIN_BAND_BINS = 3
+
+
+def check_first_bin_fits(first_bin: int, n_freq: int, where: str = "chi.first_bin") -> None:
+    """ValueError when *first_bin* leaves fewer than 3 bins up to Nyquist.
+
+    *n_freq* is the one-sided grid's length, ``fft_length // 2 + 1`` (DC and
+    Nyquist included). Such a value would make every window NaN; refusing it
+    names the cause instead of a non-detection warning per window. Whether
+    enough bins remain below the anti-alias limit depends on the speed, so that
+    is reported per window (:func:`_first_bin_starves`).
+    """
+    left = int(n_freq) - int(first_bin)
+    if left < _MIN_BAND_BINS:
+        raise ValueError(
+            f"{where} = {first_bin} leaves {max(left, 0)} FFT bin(s) up to Nyquist at "
+            f"fft_length {2 * (int(n_freq) - 1)}; chi needs at least {_MIN_BAND_BINS}"
+        )
+
+
+def _first_bin_starves(K: np.ndarray, K_AA: float, first_bin: int, need: int) -> str | None:
+    """Why a window has too few bins, when *first_bin* is the reason; else None.
+
+    Fewer than *need* bins lie from bin *first_bin* up to ``K_AA`` while bin 1
+    and up would give enough. The window is NaN either way; this only makes the
+    warning name the cause. ``None`` when bin 1 and up would be too few as well
+    (the anti-alias limit's doing) and always at ``first_bin = 1``, so those
+    paths warn exactly as before.
+    """
+    if first_bin <= 1:
+        return None
+    in_aa = K <= K_AA
+    n = int(np.sum(_usable_bins(K, first_bin) & in_aa))
+    if n >= need:
+        return None
+    n1 = int(np.sum((K > 0) & in_aa))
+    if n1 < need:
+        return None
+    return (
+        f"only {n} FFT bin(s) from first_bin = {first_bin} up to K_AA = {K_AA:.3g} cpm "
+        f"({n1} from bin 1); chi needs {need}, so it is NaN"
+    )
+
+
+def _usable_bins(K: np.ndarray, first_bin: int = FIRST_BIN) -> np.ndarray:
+    """Bins a chi estimate may use: positive wavenumber, at or above bin *first_bin*.
+
+    DC (``K <= 0``) is never usable, and of the positive-wavenumber bins the
+    lowest ``first_bin - 1`` are dropped. On the production grid (``K[0]`` = DC,
+    ``K[i]`` = bin ``i``) that is exactly ``index >= first_bin``; a caller whose
+    grid starts at bin 1 loses the same bins. *K* is monotone increasing, as
+    every FFT grid is. ``first_bin = 1`` is ``K > 0``, the band before
+    :data:`FIRST_BIN` existed.
+    """
+    usable = np.asarray(K) > 0
+    if first_bin > 1:
+        usable[np.flatnonzero(usable)[: first_bin - 1]] = False
+    return usable
+
 
 def _band_slice(valid: np.ndarray) -> slice:
     """The CONTIGUOUS index band spanned by a selection mask.
@@ -308,12 +400,13 @@ def _valid_wavenumber_mask(
     K: np.ndarray,
     K_AA: float,
     min_points: int = 3,
+    first_bin: int = FIRST_BIN,
 ) -> np.ndarray:
     """Build a boolean mask for valid wavenumber points.
 
-    Selects points where the observed spectrum exceeds 2x noise, K > 0,
-    and K <= K_AA.  Falls back to K > 0 & K <= K_AA if too few points
-    pass the noise criterion.
+    Selects points where the observed spectrum exceeds 2x noise, at or above
+    FFT bin *first_bin* (:func:`_usable_bins`), and K <= K_AA.  Falls back to
+    every usable bin with K <= K_AA if too few points pass the noise criterion.
 
     Parameters
     ----------
@@ -327,15 +420,18 @@ def _valid_wavenumber_mask(
         Anti-aliasing wavenumber limit [cpm].
     min_points : int
         Minimum valid points required.
+    first_bin : int
+        Lowest FFT bin used, DC = bin 0 (:data:`FIRST_BIN`).
 
     Returns
     -------
     mask : ndarray of bool
     """
     above_noise = spec_obs > 2 * noise
-    mask = above_noise & (K > 0) & (K <= K_AA)
+    usable = _usable_bins(K, first_bin) & (K <= K_AA)
+    mask = above_noise & usable
     if np.sum(mask) < min_points:
-        mask = (K > 0) & (K <= K_AA)
+        mask = usable
     return mask
 
 
@@ -382,18 +478,20 @@ def _below_detection(
     K_AA: float,
     min_points: int = 3,
     dof: float = 0.0,
+    first_bin: int = FIRST_BIN,
 ) -> bool:
     """True when a window is a non-detection.
 
     Fewer than :func:`detection_floor` bins clear 2x the noise floor within the
-    resolved band ``(0, K_AA]`` — the strict ``above_noise`` criterion of
-    :func:`_valid_wavenumber_mask` *without* its whole-band fallback.  Used to
-    reject noise-only windows before any chi path (the known-epsilon integral or
-    an MLE Batchelor fit) can shape a curve to the noise floor and emit a
-    spurious finite chi whose figure of merit (model fitted to obs) sits near 1.
-    Defined once so all three chi paths share the identical detection limit.
+    resolved band, bin *first_bin* up to ``K_AA`` — the strict ``above_noise``
+    criterion of :func:`_valid_wavenumber_mask` *without* its whole-band
+    fallback.  Used to reject noise-only windows before any chi path (the
+    known-epsilon integral or an MLE Batchelor fit) can shape a curve to the
+    noise floor and emit a spurious finite chi whose figure of merit (model
+    fitted to obs) sits near 1. Defined once so all three chi paths share the
+    identical detection limit, over the same bins they may use.
     """
-    in_band = (K > 0) & (K <= K_AA)
+    in_band = _usable_bins(K, first_bin) & (K <= K_AA)
     above_noise = (spec_obs > 2.0 * noise) & in_band
     need = detection_floor(int(np.sum(in_band)), dof, min_points)
     return int(np.sum(above_noise)) < need
@@ -418,6 +516,7 @@ def _chi_from_epsilon(
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
     dof: float = 0.0,
+    first_bin: int = FIRST_BIN,
 ) -> ChiEpsilonResult:
     """Compute chi for one probe in one window, given epsilon (Method 1).
 
@@ -449,6 +548,14 @@ def _chi_from_epsilon(
         Molecular thermal diffusivity [m²/s]. Per-window T/S/P value from
         :func:`odas_tpw.scor160.ocean.kappa_T`; defaults to the fixed
         ``batchelor.KAPPA_T`` for backward compatibility.
+    dof : float
+        Spectral degrees of freedom of the window, for the detection floor
+        (:func:`detection_floor`); 0 = unknown.
+    first_bin : int
+        Lowest FFT bin used, DC = bin 0 (:data:`FIRST_BIN`). *K* is the full
+        one-sided FFT grid, so ``K[i]`` is bin ``i``. The detection gate, the
+        band, the variance correction's ``K_min``, ``fom``, ``mad_shape`` and
+        ``var_resolved`` all start there.
 
     Returns
     -------
@@ -478,14 +585,20 @@ def _chi_from_epsilon(
     # fom ~= 1 for the noise floor itself).  Reject such windows as non-detections
     # here, at the source, so they become NaN and drop out of chiMean rather than
     # biasing its low tail and the derived mixing products.  (2026-07-03 review.)
-    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof):
+    # Too few bins from first_bin up is said as such, not as a non-detection
+    # (the same NaN result the gate would return).
+    starved = _first_bin_starves(K, K_AA, first_bin, _MIN_BAND_BINS)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
+    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
         )
         return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
 
-    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3)
+    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=3, first_bin=first_bin)
     if np.sum(valid) < 3:
         warnings.warn("Too few valid wavenumber points for chi integration", stacklevel=2)
         return ChiEpsilonResult(np.nan, kB, np.nan, np.zeros_like(K), np.nan, np.nan)
@@ -526,7 +639,8 @@ def _chi_from_epsilon(
 
     # V_resolved spans the SAME measured band [K_min, K_max] that the observed
     # integral covers, mirroring the Method-2 path so the unresolved-variance
-    # correction is not double-counted.
+    # correction is not double-counted. K_min is bin first_bin or above, so the
+    # correction models all of [0, K_min], bin 1 included.
     K_min = float(K_band[0])
     correction = _variance_correction(kB, K_max, speed, tau0, _h2, grad_func, K_min=K_min)
     chi_var = np.trapezoid(np.maximum(s - nv, 0.0), K_band)
@@ -573,8 +687,12 @@ def _mle_find_kB(
     f_AA: float,
     speed: float,
     grad_func,
+    first_bin: int = FIRST_BIN,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Core MLE grid search for kB (no chi correction or output spectra).
+
+    The likelihood sums over bins at or above FFT bin *first_bin*
+    (:data:`FIRST_BIN`).
 
     Returns
     -------
@@ -586,7 +704,7 @@ def _mle_find_kB(
         Wavenumber vector at fit points.
     """
     K_AA = f_AA / speed
-    fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
+    fit_mask = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6, first_bin=first_bin)
     if np.sum(fit_mask) < 6:
         return np.nan, fit_mask, np.empty(0)
 
@@ -635,11 +753,15 @@ def _mle_fit_kB(
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
     dof: float = 0.0,
+    first_bin: int = FIRST_BIN,
 ) -> ChiFitResult:
     """Maximum-likelihood fit for Batchelor wavenumber kB (Ruddick et al. 2000).
 
     Performs a coarse+fine grid search over kB to minimize the MLE
-    negative log-likelihood for chi-squared spectral estimates.
+    negative log-likelihood for chi-squared spectral estimates, over bins at
+    or above FFT bin *first_bin* (:data:`FIRST_BIN`), which also starts the
+    band of the chi integral, its variance correction, ``fom``, ``mad_shape``
+    and ``var_resolved``.
 
     Parameters
     ----------
@@ -651,7 +773,7 @@ def _mle_fit_kB(
         Initial chi estimate [K²/s] from integration.
     nu : float
         Kinematic viscosity [m²/s].
-    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model
+    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model, kappa_T, dof, first_bin
         Same as :func:`_chi_from_epsilon`.
 
     Returns
@@ -666,7 +788,11 @@ def _mle_fit_kB(
     # Signal-presence gate (mirrors Method 1): reject a noise-only window before
     # the MLE fits a Batchelor curve to noise and returns a spurious finite
     # chi/kB.  (2026-07-03 adversarial review of the Method-1 gate.)
-    if _below_detection(spec_obs, noise_K, K, f_AA / speed, dof=dof):
+    starved = _first_bin_starves(K, f_AA / speed, first_bin, 6)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
+    if _below_detection(spec_obs, noise_K, K, f_AA / speed, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
@@ -682,6 +808,7 @@ def _mle_fit_kB(
         f_AA,
         speed,
         grad_func,
+        first_bin=first_bin,
     )
 
     if not np.isfinite(kB_best):
@@ -702,6 +829,7 @@ def _mle_fit_kB(
     # default K_min=0 the correction included model variance in [0, K_fit_low]
     # that obs_var excludes, inflating V_resolved and biasing chi low for
     # low-epsilon windows (audit finding) — matching the _iterative_fit path.
+    # K_fit_low is bin first_bin or above.
     K_fit_low = float(K[fit_mask][0])
     correction = _variance_correction(
         kB_best,
@@ -772,11 +900,12 @@ def _iterative_fit(
     spectrum_model: str,
     kappa_T: float = KAPPA_T,
     dof: float = 0.0,
+    first_bin: int = FIRST_BIN,
 ) -> ChiFitResult:
     """Iterative MLE fitting (Peterson & Fer 2014, Method 2).
 
     Three iterations refining the LOWER integration limit
-    ``k_l = max(K[1], 3*k_star)`` (with ``k_star = 0.04*kB*sqrt(kappa/nu)``,
+    ``k_l = max(K[first_bin], 3*k_star)`` (with ``k_star = 0.04*kB*sqrt(kappa/nu)``,
     the inertial-convective to viscous-convective transition; source below)
     and applying a model-based correction for the variance
     outside [``k_l``, ``k_u``] and for in-band FP07 attenuation (see
@@ -802,6 +931,10 @@ def _iterative_fit(
     eq. 12).  The factor 3 in ``k_l`` is not in that account and is unsourced
     here; Steinbuck et al. was not read directly.
 
+    No bin below FFT bin *first_bin* (:data:`FIRST_BIN`) enters the detection
+    gate, the MLE, the initial or refined chi integral, ``fom``, ``mad_shape``
+    or ``var_resolved``.
+
     Parameters
     ----------
     spec_obs : ndarray
@@ -810,7 +943,7 @@ def _iterative_fit(
         Wavenumber vector [cpm].
     nu : float
         Kinematic viscosity [m²/s].
-    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model
+    noise_K, H2, tau0, _h2, f_AA, speed, spectrum_model, kappa_T, dof, first_bin
         Same as :func:`_chi_from_epsilon`.
 
     Returns
@@ -831,14 +964,19 @@ def _iterative_fit(
     # band_has_signal check (spec_obs > 1x noise), emits a spurious finite
     # chi/kB. Reject at the source -> NaN, dropping it from chiMean rather than
     # biasing the low tail.  (2026-07-03 adversarial review of the Method-1 gate.)
-    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof):
+    starved = _first_bin_starves(K, K_AA, first_bin, 6)
+    if starved:
+        warnings.warn(starved, stacklevel=2)
+        return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
+    if _below_detection(spec_obs, noise_K, K, K_AA, dof=dof, first_bin=first_bin):
         warnings.warn(
             "No thermal signal above the FP07 noise floor; chi is a non-detection",
             stacklevel=2,
         )
         return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
 
-    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6)
+    usable = _usable_bins(K, first_bin)
+    valid = _valid_wavenumber_mask(spec_obs, noise_K, K, K_AA, min_points=6, first_bin=first_bin)
 
     valid_idx = np.where(valid)[0]
     if len(valid_idx) < 6:
@@ -846,6 +984,9 @@ def _iterative_fit(
         return ChiFitResult(np.nan, np.nan, np.nan, np.nan, np.zeros_like(K), np.nan, np.nan)
 
     k_u = K[valid_idx[-1]]
+    # The refined band's floor: bin first_bin's wavenumber (K[1] before
+    # FIRST_BIN). `valid` is a subset of `usable`, so it is non-empty here.
+    k_first = K[usable][0]
 
     # Initial chi estimate, integrated over the CONTIGUOUS band the selection
     # spans (see _band_slice, #180 F03): the subset grid bridges every excluded
@@ -887,6 +1028,7 @@ def _iterative_fit(
             f_AA,
             speed,
             grad_func,
+            first_bin=first_bin,
         )
 
         if not np.isfinite(kB_best) or kB_best < 1:
@@ -899,7 +1041,7 @@ def _iterative_fit(
 
         # Refine integration limits
         k_star = 0.04 * kB_best * np.sqrt(kappa_T / nu)
-        k_l_new = max(K[1], 3 * k_star)
+        k_l_new = max(k_first, 3 * k_star)
         k_u_new = k_u
 
         # Recompute chi_obs with refined limits
@@ -940,7 +1082,7 @@ def _iterative_fit(
     var_resolved_val = np.nan
     if np.isfinite(kB_best) and kB_best >= 1:
         k_star = 0.04 * kB_best * np.sqrt(kappa_T / nu)
-        k_l_final = max(K[1], 3 * k_star)
+        k_l_final = max(k_first, 3 * k_star)
         # Batchelor V_f over the final [k_l_final, k_u] band (eq (18); U4-F1).
         var_resolved_val = _batchelor_resolved_fraction(
             kB_best, k_u, grad_func, K_min=k_l_final
@@ -988,7 +1130,7 @@ def _iterative_fit(
     # mad_shape compares the same two spectra bin by bin (see _shape_mad).
     mad_shape = np.nan
     if np.isfinite(kB_best) and np.isfinite(chi):
-        valid_fom = (spec_obs > 2 * noise_K) & (K > 0) & (k_u >= K)
+        valid_fom = (spec_obs > 2 * noise_K) & usable & (k_u >= K)
         band_fom = _band_slice(valid_fom)
         K_fom = K[band_fom]
         if K_fom.size >= 3:

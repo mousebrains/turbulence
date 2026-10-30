@@ -15,6 +15,7 @@ import numpy as np
 import xarray as xr
 
 from odas_tpw._version_info import stamp_provenance
+from odas_tpw.chi.chi import FIRST_BIN, check_first_bin_fits, validate_first_bin
 from odas_tpw.chi.l2_chi import L2ChiParams, process_l2_chi
 from odas_tpw.chi.l3_chi import process_l3_chi
 from odas_tpw.chi.l4_chi import (
@@ -178,6 +179,7 @@ def run_pipeline(
     fp07_model: str = "single_pole",
     spectrum_model: str = "kraichnan",
     fit_method: str = "iterative",
+    chi_first_bin: int = FIRST_BIN,
     # Chain selection
     compute_chi_epsilon: bool = True,
     compute_chi_fit: bool = False,
@@ -219,6 +221,10 @@ def run_pipeline(
     conductivity : str
         Conductivity channel for the measured practical salinity
         ("auto" = JAC_C when present).
+    chi_first_bin : int
+        Lowest FFT bin chi uses, DC = bin 0 (``[chi] first_bin``;
+        :data:`odas_tpw.chi.chi.FIRST_BIN`, issue #191). 1 reproduces a
+        product from before bin 1 was dropped.
     (all other params documented in plan)
 
     Returns
@@ -236,6 +242,8 @@ def run_pipeline(
     _validate_speed_selection(speed, speed_method)
     if speed_method is None:
         speed_method = "pressure"
+    chi_first_bin = validate_first_bin(chi_first_bin, where="chi_first_bin")
+    check_first_bin_fits(chi_first_bin, chi_fft_length // 2 + 1, where="chi_first_bin")
 
     if diss_length is None:
         diss_length = 4 * fft_length
@@ -295,6 +303,7 @@ def run_pipeline(
                 fp07_model=fp07_model,
                 spectrum_model=spectrum_model,
                 fit_method=fit_method,
+                chi_first_bin=chi_first_bin,
                 compute_chi_epsilon=compute_chi_epsilon,
                 compute_chi_fit=compute_chi_fit,
                 bin_size=bin_size,
@@ -337,6 +346,7 @@ def _pipeline_one_file(
     fp07_model: str,
     spectrum_model: str,
     fit_method: str,
+    chi_first_bin: int,
     compute_chi_epsilon: bool,
     compute_chi_fit: bool,
     bin_size: float,
@@ -490,6 +500,7 @@ def _pipeline_one_file(
             fp07_model=fp07_model,
             spectrum_model=spectrum_model,
             fit_method=fit_method,
+            chi_first_bin=chi_first_bin,
             compute_chi_epsilon=compute_chi_epsilon,
             compute_chi_fit=compute_chi_fit,
             bin_size=bin_size,
@@ -543,6 +554,7 @@ def _process_profile(
     fp07_model: str,
     spectrum_model: str,
     fit_method: str,
+    chi_first_bin: int,
     compute_chi_epsilon: bool,
     compute_chi_fit: bool,
     bin_size: float,
@@ -646,6 +658,7 @@ def _process_profile(
                         l4,
                         spectrum_model=spectrum_model,
                         f_AA=f_AA,
+                        first_bin=chi_first_bin,
                     )
                     n_valid = np.sum(np.isfinite(l4_chi_eps.chi_final))
                     logger.info(f"Chi (Method 1): {n_valid} valid estimates")
@@ -660,6 +673,7 @@ def _process_profile(
                         spectrum_model=spectrum_model,
                         fit_method=fit_method,
                         f_AA=f_AA,
+                        first_bin=chi_first_bin,
                     )
                     n_valid = np.sum(np.isfinite(l4_chi_fit_result.chi_final))
                     logger.info(f"Chi (Method 2): {n_valid} valid estimates")
@@ -1202,6 +1216,11 @@ def _write_l4_chi(
             "method": l4_chi.method,
         },
     )
+    # The chi band's lowest FFT bin (issue #191), as chi_io records it: only a
+    # value other than 1, so the attr's absence means bin 1.
+    first_bin = getattr(l4_chi, "first_bin", None)
+    if first_bin is not None and first_bin != 1:
+        ds.attrs["first_bin"] = int(first_bin)
     if temperature_source is not None:
         ds.attrs["temperature_source"] = temperature_source
     if temperature_qc is not None:
