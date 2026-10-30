@@ -67,6 +67,14 @@ from the configs in two places:
   two files are counted under T3304, which is an assumption.
 - **A bench-test file is left out.**
 
+VMP SN 142's sh2 at ARCTERX-2025 Interior is likewise attributed by probe,
+not by config. Every config says M1218 (sens 0.0629), but the row gives
+**M1281**. A photo of the installed probes shows a sleeve labeled M1281 and
+none labeled M1218. 0.0629 is M1281's 2021-04-28 calibration (owner,
+2026-10-30), one day after the 2021-04-27 calibration of the instrument's sh1,
+M1254 (0.0739). M1218's only sheet is 0.0797 (2014). So the configured serial
+is a transposition. M1281's sheets are requested.
+
 B's FP07s stay as the placeholder `T`. The resistance evidence makes T2
 very likely T3308. T1 is T3306 or T3302, and the evidence cannot separate
 them. (T2 drifted +1.4% in resistance during the deployment.)

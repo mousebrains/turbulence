@@ -230,9 +230,12 @@ which has not been run. The configs that disagree with a now-held sheet:
   recalibrated probe flew, sh1 ε is 1.80× low.
 - **VMP SN 194, SUNRISE 2022 Point Sur: sh2 M289 0.0725** is its 2016 sheet;
   the 2021-04-27 recalibration says **0.0794** (ε 1.20× high if that is right).
-- **VMP SN 142, ARCTERX-2025 Interior: sh2 M1218 0.0629** matches no sheet.
-  The only one held is 2014-12-15, 0.0797, so this is most likely a later
-  calibration we don't have.
+- **VMP SN 142, ARCTERX-2025 Interior: sh2 M1218 0.0629** matches no M1218
+  sheet (the only one is 2014-12-15, 0.0797). **Answered 2026-10-30: the probe
+  is M1281**, and the configured serial is a transposition. A photo of the
+  installed probes shows an M1281 sleeve and no M1218, and 0.0629 is M1281's
+  2021-04-28 calibration (owner). It was ~46 months old at use, as sh1 M1254's
+  2021-04-27 calibration was (M1254 read 0.0847 by 2026-04-28).
 - **The CASPER-East rows for M1344 / M1371 also flag**, only at their last
   date, 2016-08-08. That date comes from `CAS_170`, a stray file whose header
   is dated ten months after the cruise and which yields no data. The cruise
@@ -251,8 +254,10 @@ which has not been run. The configs that disagree with a now-held sheet:
 
 ## Next request (not yet sent)
 
-1. **M1218** — any calibration after 2014-12-15 (the 0.0629 in the
-   ARCTERX-2025 Interior config).
+1. **M1281** — its sheets (2021-04-28, 0.0629) and any later calibration.
+   It flew as VMP SN 142's sh2 at ARCTERX-2025 Interior under the configured
+   serial M1218. A calibration after 2025-02 would bound its drift at use. The
+   owner is requesting these (2026-10-30).
 2. **M1194 / M1196-B** — is the 2016-04-07 "M1194" sheet (0.0793, 1.087 nF,
    sent to OSU as `M1194_2_...`) the same physical probe as the M1194 that
    read 0.0549 on 2016-03-14 and 0.0551 on 2016-04-18 (0.846–0.941 nF over
