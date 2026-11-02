@@ -339,9 +339,11 @@ def load_probe_series(
     path).  The mask is chi's per-thermistor one
     (:func:`odas_tpw.rsi.bad_buffer.probe_masks` on the channel's own
     ``T*`` / ``T*_dT*`` reports, dilated over the deconvolution's local
-    smear).  A marker run on a deconvolved thermistor moves the whole file
-    (:func:`smeared_file_wide`), so that channel is blanked in full and named
-    in ``bad_buffer_dropped``.  ``bad_buffer`` counts what was blanked, per
+    smear).  PFile interpolates a marker run on a deconvolved thermistor
+    before deconvolving (#259), so it stays local too; one it could not
+    interpolate would move the whole file (:func:`smeared_file_wide`), and
+    that channel is blanked in full and named in ``bad_buffer_dropped``.
+    ``bad_buffer`` counts what was blanked, per
     channel.  A v6.0 file's records flagged in header word 16 are not in the
     report (PFile only warns), so they are not blanked.
     """
@@ -628,16 +630,21 @@ def smeared_file_wide(pf: Any, name: str) -> bool:
 
     A thermistor (``T1`` with ``T1_dT1``), or ``P`` with ``P_dP`` for a
     reference built from the instrument's own channels (runbook section 8).
-    PFile leaves a marker (the -32753 sentinel) in place and deconvolves
-    ``T1`` from ``T1`` and ``T1_dT1`` with two regressions over the WHOLE
-    file, which one such run moves: 64 sentinels injected into SN479_0006
-    moved ``T1`` more than 20 s from the run by -8..+57 mK (5-95%, in
-    ``T1_dT1``) and -234..-64 mK (in ``T1``), linearly in T, where the
-    3 ``diff_gain`` mask reaches only the local part (issue #259 fixes it in
-    PFile).  So the channel is left out of that file whole rather than
-    repaired here a second way.  Record slots a framing repair rebuilt are
-    interpolated BEFORE the deconvolution and stay local; a thermistor with no
-    pre-emphasised partner is not deconvolved.
+    ``T1`` is deconvolved from ``T1`` and ``T1_dT1`` with two regressions over
+    the WHOLE file, which one marker run (the -32753 sentinel) moves if it is
+    still there: 64 sentinels injected into SN479_0006 moved ``T1`` across the
+    file by -270..+99 mK (5-95%), and ``P`` by -8..+10 dbar.  PFile now
+    interpolates every marker out of both inputs before it deconvolves (issue
+    #259), with any rebuilt framing slot the run touches, and says so in the
+    entry (``interpolated_before_deconvolution``).  Outside the 3 ``diff_gain``
+    mask the residual is then 0.1 mK and 5 mdbar at most (0.6 mK beside a
+    rebuilt slot).  So this is True
+    only where PFile did NOT interpolate (a channel with no sample outside its
+    runs, a ``_dX`` channel PFile does not deconvolve, or a duck-typed shim),
+    and the channel is then left out of that file whole.  Record slots a
+    framing repair rebuilt are interpolated before the deconvolution too and
+    stay local; a thermistor with no pre-emphasised partner is not
+    deconvolved.
     """
     found = (getattr(pf, "bad_buffer_report", None) or {}).get("confirmed") or {}
     partner = f"{name}_d{name}"
@@ -647,7 +654,7 @@ def smeared_file_wide(pf: Any, name: str) -> bool:
     slots = (getattr(pf, "framing_report", None) or {}).get("rebuilt_slots") or []
     for ch in (name, partner):
         entry = found.get(ch)
-        if not entry:
+        if not entry or entry.get("interpolated_before_deconvolution"):
             continue
         per = spr if str(entry.get("rate", "slow")) == "fast" else spr // max(1, int(pf.n_rows))
         rebuilt = [(a * per, (a + k) * per) for a, k in slots]

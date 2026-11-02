@@ -368,9 +368,11 @@ instrument's own time stamps. A subset is fine; nothing may be interpolated,
 so samples PFile reports as bad buffers (or rebuilt after a framing repair)
 are blanked, and the NaN drops them. `bad_buffer_mask` is chi's mask, as
 `fp07-cal` uses it for the thermistors: `P` with its pre-emphasised `P_dP`
-folded in and widened over the deconvolution's 3 `diff_gain`. A marker run on
-`P` or `P_dP` moves the deconvolved `P` over the whole file, as on a
-thermistor (issue #259), so `smeared_file_wide` drops that file's `P` whole:
+folded in and widened over the deconvolution's 3 `diff_gain`. PFile
+interpolates a marker run on `P` or `P_dP` out of both before it deconvolves
+(issue #259), so the run stays local, as on a thermistor. `smeared_file_wide`
+catches the case where PFile could not interpolate it, which would move the
+deconvolved `P` over the whole file, and drops that file's `P` whole:
 
 ```python
 from pathlib import Path
@@ -499,12 +501,16 @@ What then differs from a glider:
   count them. On ARCTERX-2022 Wake, whose ARC1A046 has one rebuilt record,
   250 and 244 counts were blanked and the fit is the same to round-off: the
   slot lies before the first descent. A rebuilt slot stays local because
-  PFile interpolates it BEFORE deconvolving; an RDL marker run (the -32753
-  sentinel, left in place) on `T1` or `T1_dT1` instead moves the
-  deconvolution's two whole-file regressions (issue #259): 64 sentinels
-  injected into SN479_0006 moved `T1` by -8..+57 mK (in `T1_dT1`) and
-  -234..-64 mK (in `T1`) more than 20 s away, linearly in T. So that channel
-  is left out of that file whole (`bad_buffer_dropped`; the record's
+  PFile interpolates it BEFORE deconvolving. Since issue #259 it does the same
+  for an RDL marker run (the -32753 sentinel) on `T1` or `T1_dT1`. Left in, such a
+  run moved the deconvolution's two whole-file regressions: 64 sentinels
+  injected into SN479_0006 moved `T1` by -270..+99 mK (5-95%) more than 20 s
+  away. PFile now interpolates every marker out first, short runs and any
+  rebuilt slot the run touches included; outside the 3 `diff_gain` mask the
+  residual is then 0.1 mK at most (0.6 mK beside a rebuilt slot), and the run
+  is blanked locally like a rebuilt slot. Only a run PFile could not
+  interpolate still drops the channel from that file whole
+  (`bad_buffer_dropped`; the record's
   `n_files_dropped`/`files_dropped`). None of 2248 glider and ARCTERX-2022
   Wake files has such a run (osu685 2023 has U_EM runs in 22). A v6.0 file
   flags bad records in header word 16 instead, which PFile only warns about

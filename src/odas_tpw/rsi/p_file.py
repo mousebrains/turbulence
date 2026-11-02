@@ -775,11 +775,17 @@ class PFile:
         rebuilt by a framing repair; empty for a clean file.
         ``{'confirmed': {channel: {...}}, 'isolated': {channel: n}}``; see
         :meth:`_check_bad_buffer_markers`. The affected samples are reported,
-        never modified — each confirmed entry's
+        and modified only where a deconvolution would carry them file-wide —
+        each confirmed entry's
         ``spans`` are ``(start, length)`` pairs into that channel's own
         extracted samples, which :mod:`odas_tpw.rsi.bad_buffer` turns into
         per-consumer epsilon/chi masks. Record slots rebuilt by a framing
-        repair are reported here too, for every channel.
+        repair are reported here too, for every channel. An entry of a
+        deconvolved pair (``T1``/``T1_dT1``, ``P``/``P_dP``) also carries
+        ``interpolated_before_deconvolution``: how many marker samples
+        :meth:`_apply_deconvolution` replaced by linear interpolation before
+        its whole-file regressions (issue #259). Its spans are still
+        reported and still masked.
     framing_report : dict
         Empty for a correctly framed file. When records of the wrong length
         broke the fixed-size framing and *framing* was ``"repair"``: the
@@ -833,6 +839,9 @@ class PFile:
         # Populated by _check_bad_buffer_markers during the v6 parse; set here
         # too so the attribute exists even on the paths that return early.
         self.bad_buffer_report: dict[str, Any] = {}
+        # Whether -32753 is an RDL marker in this file (v6.1+); set by
+        # _check_bad_buffer_markers, read by _interp_marker_runs.
+        self._marker_version = False
         # Populated by _repair_framing (empty for a correctly framed file);
         # _framing_hits marks, in raw_flat's shape, the samples it rebuilt.
         self.framing_report: dict[str, Any] = {}
@@ -1638,11 +1647,13 @@ class PFile:
 
         Findings land in :attr:`bad_buffer_report` and, for runs at least
         ``BAD_BUFFER_MIN_RUN`` long, raise a warning. Samples are NOT
-        modified: which repair (mask, interpolate, drop the profile) is right
-        depends on the channel and the analysis, so that stays the caller's
-        decision — the report's ``spans`` carry ``(start, length)`` into the
-        channel's own extracted samples so a caller can mask them directly.
-        :mod:`odas_tpw.rsi.bad_buffer` turns them into the epsilon/chi masks.
+        modified here: which repair (mask, interpolate, drop the profile) is
+        right depends on the channel and the analysis, so that stays the
+        caller's decision — the report's ``spans`` carry ``(start, length)``
+        into the channel's own extracted samples so a caller can mask them
+        directly. :mod:`odas_tpw.rsi.bad_buffer` turns them into the
+        epsilon/chi masks. The one exception is a deconvolved pair, whose
+        marker samples :meth:`_apply_deconvolution` interpolates first.
 
         Record slots rebuilt by :meth:`_repair_framing` are reported here
         too, on every channel and in any header version; the warning stays
@@ -1662,7 +1673,8 @@ class PFile:
             version = int(hdrs[0, _H["header_version"]])
         markers = None
         # v6.0 and older use the word-16 / channel-255 mechanism instead.
-        if (version >> 8, version & 0xFF) >= (6, 1):
+        self._marker_version = (version >> 8, version & 0xFF) >= (6, 1)
+        if self._marker_version:
             hits = raw_flat == BAD_BUFFER_SENTINEL
             if hits.any():
                 markers = hits
@@ -1802,6 +1814,54 @@ class PFile:
                 isolated[name] = n_short
         return confirmed, isolated
 
+    def _interp_marker_runs(self, name: str, raw: np.ndarray) -> np.ndarray:
+        """*raw* with every RDL marker of *name* replaced by linear interpolation
+        along its own samples, before the deconvolution (issue #259).
+
+        :func:`deconvolve` fits two regressions over the WHOLE file and runs a
+        recursive filter, so one -32753 count left in its input moves every
+        deconvolved sample: 64 of them (one RDL buffer) moved ``T1`` across
+        the file by -270..+99 mK (5-95%), and ``P`` by -8..+10 dbar; three
+        moved ``T1`` by up to 22 mK. So on a v6.1+ file, where the sentinel
+        is a marker, every sample equal to it is replaced: the confirmed runs
+        and the isolated hits alike. A hit is "consistent with ordinary data"
+        on the channels :data:`BAD_BUFFER_MIN_RUN` was measured on (JAC_T,
+        JAC_C, turbidity), none of them deconvolved. On a thermistor or
+        pressure channel a genuine -32753 sits on the ADC's negative rail
+        among neighbours that do too, where interpolation changes nothing.
+
+        A confirmed span holding a marker is replaced WHOLE. A slot a framing
+        repair rebuilt next to a marker run was interpolated from that run's
+        -32753 counts, and its span merges with the run's
+        (:func:`_merge_bad_entries`). A span with no marker, a rebuilt slot
+        alone, is already interpolated and is left as it is.
+
+        The spans stay in :attr:`bad_buffer_report` and are masked as before.
+        Returns *raw* itself when there is nothing to replace or nothing to
+        interpolate from, else a float64 copy; a confirmed entry records the
+        count as ``interpolated_before_deconvolution``.
+        """
+        if not self._marker_version:
+            return raw
+        hit = np.asarray(raw) == BAD_BUFFER_SENTINEL
+        if not hit.any():
+            return raw
+        bad = hit.copy()
+        n = len(raw)
+        entry = (self.bad_buffer_report.get("confirmed") or {}).get(name)
+        for start, length in (entry or {}).get("spans") or []:
+            lo, hi = max(0, int(start)), min(n, int(start) + int(length))
+            if hit[lo:hi].any():
+                bad[lo:hi] = True
+        if bad.all():
+            return raw
+        out = np.array(raw, dtype=np.float64, copy=True)
+        idx = np.arange(n)
+        out[bad] = np.interp(idx[bad], idx[~bad], out[~bad])
+        if entry is not None:
+            entry["interpolated_before_deconvolution"] = int(bad.sum())
+        return out
+
     def _apply_deconvolution(self, ch_config: dict) -> None:
         """Deconvolve pre-emphasized channels to produce high-resolution data.
 
@@ -1879,6 +1939,13 @@ class PFile:
 
             # Get the non-pre-emphasized channel if available
             X_raw = self.channels_raw.get(base_name)
+
+            # RDL marker runs out of both inputs first: deconvolve() fits two
+            # regressions over the WHOLE file, so a sentinel run left in would
+            # move every deconvolved sample, not only those near it (#259).
+            X_dX_raw = self._interp_marker_runs(dX_name, X_dX_raw)
+            if X_raw is not None:
+                X_raw = self._interp_marker_runs(base_name, X_raw)
 
             # Deconvolve on raw data (before physical-unit conversion)
             hres = deconvolve(X_raw, X_dX_raw, fs_dX, diff_gain_val)

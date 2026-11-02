@@ -510,9 +510,10 @@ def _bad_buffer_note(s: dict) -> str:
     if s.get("n_files_dropped"):
         whole = (
             f" In {s['n_files_dropped']} of those file(s) an RDL marker run fell on this "
-            f"thermistor or its pre-emphasised partner, which PFile's deconvolution smears "
-            f"over the whole file (issue #259), so the channel was left out of each such "
-            f"file whole: {', '.join(s['files_dropped'])}."
+            f"thermistor or its pre-emphasised partner that PFile could not interpolate "
+            f"before deconvolving, which would smear it over the whole file (issue #259), "
+            f"so the channel was left out of each such file whole: "
+            f"{', '.join(s['files_dropped'])}."
         )
     return (
         f"{s['n_samples']} thermistor count(s) in {s['n_files']} file(s) were set to NaN, "
@@ -720,7 +721,8 @@ def run_calibration(probes, ref, cfg: dict, out_dir: Path, *, make_figure: bool 
                 "n_samples": sum(blanked.values()),
                 "n_files": len(blanked),
                 "files": sorted(blanked)[:20],
-                # left out whole: a marker run smears the deconvolution file-wide
+                # left out whole: a marker run PFile could not interpolate first
+                # would smear the deconvolution file-wide (#259)
                 **({"n_files_dropped": len(whole), "files_dropped": whole[:20]}
                    if whole else {}),
             }
