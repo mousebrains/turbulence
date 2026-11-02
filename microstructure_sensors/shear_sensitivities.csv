@@ -56,6 +56,11 @@ M1268,2018-03-15,0.0412,V/(m^2 s^-2),sheet,M1268_2018_03_15.pdf,,,
 M1268,2019-03-18,0.0418,V/(m^2 s^-2),sheet,M1268_2019_03_18.pdf,,,
 M1277,2015-04-30,0.0683,V/(m^2 s^-2),sheet,M1277_2015_04_30.pdf,,,
 M1277,2016-04-12,0.0617,V/(m^2 s^-2),sheet,M1277_2016_04_12.pdf,,,
+M1281,2015-05-01,0.0699,V/(m^2 s^-2),sheet,M1281_2015_05_01.pdf,,,"Calibrated 7 days after the probe's pressure test (2015-04-24, printed on its 2021 and 2026 sheets; this tabular sheet prints none): too soon by the ~10-day rule (README, Pressure-test timing). The next calibration off that test, 2016-04-11, reads 0.0585 (16% lower), but 11 months apart, so drift is not excluded; both tabular sheets also record a 1-h 8700 psi soak in the session"
+M1281,2016-04-11,0.0585,V/(m^2 s^-2),sheet,M1281_2016_04_11.pdf,,,
+M1281,2021-04-28,0.0629,V/(m^2 s^-2),sheet,M1281_2021_4_28.pdf,2022-04-28,2015-04-24,
+M1281,2023-06-07,0.0629,V/(m^2 s^-2),sheet,M1281_2026_04_28.pdf,,,"previous-calibration entry on this sheet; DATE WRONG - the value is bit-identical to the 2021-04-28 sheet, whose own previous entry is 2016-04-11: no calibration in between is on record. Every 2026-04-28 sheet as first issued prints this 2023-06-07 previous date. Wrong previous-date defect - see README, Known bad sheets"
+M1281,2026-04-28,0.0664,V/(m^2 s^-2),sheet,M1281_2026_04_28.pdf,2027-04-28,2015-04-24,
 M1344,2015-08-11,0.0655,V/(m^2 s^-2),sheet,M1344_2015_08_11.pdf,,,
 M1344,2016-04-11,0.0615,V/(m^2 s^-2),sheet,M1344_2016_04_11.pdf,,,
 M1371,2015-09-03,0.0855,V/(m^2 s^-2),sheet,M1371_2015_09_03.pdf,,,

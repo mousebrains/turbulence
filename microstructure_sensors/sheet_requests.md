@@ -235,7 +235,12 @@ which has not been run. The configs that disagree with a now-held sheet:
   is M1281**, and the configured serial is a transposition. A photo of the
   campaign's probe sleeves shows "M1281 600BAR, 2021-04-28 S= 0.0629" and no
   M1218 (README, *sensor_deployments.csv*). It was ~46 months old at use, as sh1 M1254's
-  2021-04-27 calibration was (M1254 read 0.0847 by 2026-04-28).
+  2021-04-27 calibration was (M1254 read 0.0847 by 2026-04-28). M1281's
+  sheets arrived 2026-11-02. The 2021-04-28 sheet prints 0.0629, so the
+  configured value is right. M1281 read 0.0664 on 2026-04-28, 14 months after
+  the deployment. If it drifted steadily between the two, ε at use was 1.00×
+  to 1.11× high. Steady drift is an assumption: the probe fell 16% between its
+  2015 and 2016 calibrations.
 - **The CASPER-East rows for M1344 / M1371 also flag**, only at their last
   date, 2016-08-08. That date comes from `CAS_170`, a stray file whose header
   is dated ten months after the cruise and which yields no data. The cruise
@@ -267,10 +272,11 @@ which has not been run. The configs that disagree with a now-held sheet:
 
 ## Next request (not yet sent)
 
-1. **M1281** — its sheets (2021-04-28, 0.0629) and any later calibration.
-   It flew as VMP SN 142's sh2 at ARCTERX-2025 Interior under the configured
-   serial M1218. A calibration after 2025-02 would bound its drift at use. The
-   owner is requesting these (2026-10-30).
+1. ~~**M1281**~~ — answered 2026-11-02: four sheets (2015-05-01,
+   2016-04-11, 2021-04-28 0.0629, 2026-04-28 0.0664), indexed in
+   `shear_sensitivities.csv`. It flew as VMP SN 142's sh2 at ARCTERX-2025
+   Interior under the configured serial M1218. The 2026-04-28 calibration
+   bounds its drift at use (above).
 2. **M1194 / M1196-B** — is the 2016-04-07 "M1194" sheet (0.0793, 1.087 nF,
    sent to OSU as `M1194_2_...`) the same physical probe as the M1194 that
    read 0.0549 on 2016-03-14 and 0.0551 on 2016-04-18 (0.846–0.941 nF over
@@ -278,8 +284,8 @@ which has not been run. The configs that disagree with a now-held sheet:
    2017-08-24 recalibration?
 3. **M1254 2015-02-06** — confirm 0.0802 (its own sheet) rather than the
    0.0820 quoted as "previous" on `M1254_2021_4_27.pdf`.
-4. **Wrong "previous calibration" dates** — re-issue M2245, M3036 and M3037
-   (2026-04-28), M1194 (2026-06-22) and M1496 (2022-06-20) with the previous
+4. **Wrong "previous calibration" dates** — re-issue M2245, M3036, M3037 and
+   M1281 (2026-04-28), M1194 (2026-06-22) and M1496 (2022-06-20) with the previous
    date corrected, as Rockland already did for M1254 and M1458 on 2026-07-03.
 5. ~~**M3038 2024-07-15**~~ — answered 2026-10-30: MR SN 435 used M3038 0.1093
    and M3039 0.1189 (the 2024-07-09 calibrations); both 2024-07-15 sheets are
