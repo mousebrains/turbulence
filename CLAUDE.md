@@ -181,11 +181,14 @@ Facts that are easy to get wrong:
   `load_probe_series` sets to NaN what chi's per-thermistor mask marks
   (`rsi.bad_buffer.probe_masks` on `T*`/`T*_dT*`, with the deconvolution
   smear; not pressure), and the record's `bad_buffer_samples` counts them.
-  A framing-repair slot stays local, but an RDL MARKER run on a deconvolved
-  thermistor moves PFile's whole-file deconvolution regressions (#259: tens
-  to hundreds of mK file-wide), so that channel is dropped from that file
-  whole (`files_dropped`). v6.0 header-word-16 records only warn in PFile and
-  are still paired.
+  A framing-repair slot stays local, and so does an RDL MARKER run on a
+  deconvolved pair: PFile interpolates its sentinels out of `X` and `X_dX`
+  (isolated hits, and any rebuilt framing slot a run touches, included)
+  BEFORE the deconvolution's whole-file regressions (#259; left in, 64 of
+  them moved T1 by up to -270 mK and P by +-10 dbar file-wide), and flags the
+  entry `interpolated_before_deconvolution`. Only a run it could not
+  interpolate still drops the channel from that file whole (`files_dropped`).
+  v6.0 header-word-16 records only warn in PFile and are still paired.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
   keeps the factory coefficients while its neighbors are fitted, putting one

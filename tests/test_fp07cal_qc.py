@@ -338,22 +338,45 @@ def _sentinels(raw: bytes, name: str, k: int, n: int = 64) -> bytes:
 
 
 @pytest.mark.parametrize("name", ["T1_dT1", "T1"])
-def test_a_marker_run_on_a_deconvolved_thermistor_drops_it_from_the_file(
-        name, sn479, tmp_path):
+def test_a_marker_run_on_a_deconvolved_thermistor_stays_local(name, sn479, tmp_path):
     """PFile deconvolves T1 from T1 and T1_dT1 with two regressions over the WHOLE
-    file, which one sentinel run moves (#259): injected here, T1 more than 20 s away
-    read -8..+57 mK (in T1_dT1) and -234..-64 mK (in T1), 5-95%. The 3 diff_gain
-    mask removes only the local part, so the channel is left out of the file."""
-    clean = sn479[0]
+    file, which one sentinel run moved by tens to hundreds of mK (#259). PFile now
+    interpolates the run out first, so only the 3 diff_gain mask is blanked and the
+    rest of the file is the clean one's: the channel is not dropped whole."""
+    clean, _hit, _per, fs = sn479
     hit_path = tmp_path / "markers.p"
     hit_path.write_bytes(_sentinels(VMP_P.read_bytes(), name, 200))
     with pytest.warns(UserWarning, match="bad-buffer markers"):
         hit = load_probe_series(hit_path, profiles=[], speed_var=None)
-    assert name in PFile(hit_path).bad_buffer_report["confirmed"]
-    assert hit.bad_buffer_dropped == ["T1"]
-    assert hit.alive["T1"]  # judged on the counts as recorded, before the drop
-    assert np.isnan(hit.counts["T1"]).all() and hit.bad_buffer["T1"] == hit.time.size
+    with pytest.warns(UserWarning, match="bad-buffer markers"):
+        entry = PFile(hit_path).bad_buffer_report["confirmed"][name]
+    assert entry["interpolated_before_deconvolution"] == 64
+    assert hit.bad_buffer_dropped == []
+    c = hit.counts["T1"]
+    bad = np.flatnonzero(np.isnan(c))
+    assert hit.bad_buffer["T1"] == bad.size and 0 < bad.size < 0.01 * c.size
+    assert np.array_equal(bad, np.arange(bad[0], bad[-1] + 1))  # one local run
+    rest = np.ones(c.size, dtype=bool)
+    rest[max(0, bad[0] - int(5 * fs)): bad[-1] + 1 + int(5 * fs)] = False
+    # Left in, the run moved T1 20 s and more away by up to 38 (run in T1_dT1)
+    # and 152 (run in T1) counts; interpolated out, by 0.013 at most.
+    np.testing.assert_allclose(c[rest], clean.counts["T1"][rest], rtol=0, atol=0.1)
     np.testing.assert_array_equal(hit.counts["T2"], clean.counts["T2"])  # its own pair
+
+
+def test_a_marker_run_pfile_did_not_interpolate_still_drops_the_file():
+    """The fallback: an entry without ``interpolated_before_deconvolution`` (a run
+    with no sample outside it, or a duck-typed shim) would still smear file-wide."""
+    from types import SimpleNamespace
+
+    from odas_tpw.fp07cal.series import smeared_file_wide
+
+    report = {"confirmed": {"T1_dT1": {"rate": "fast", "spans": [(100, 64)]}}}
+    pf = SimpleNamespace(bad_buffer_report=report, channels={"T1": 0, "T1_dT1": 0},
+                         samples_per_record=1024, n_rows=8, framing_report={})
+    assert smeared_file_wide(pf, "T1")
+    report["confirmed"]["T1_dT1"]["interpolated_before_deconvolution"] = 64
+    assert not smeared_file_wide(pf, "T1")
 
 
 def test_a_rebuilt_record_stays_local(sn479):
@@ -616,9 +639,10 @@ def test_the_reference_recipe_masks_pressure_with_its_partner(tmp_path):
     run = np.flatnonzero(bad)
     assert run[0] <= start and run[-1] + 1 >= start + n + round(3 * gain * pf.fs_slow) - 1
     assert not bad_buffer_mask(pf, "JAC_T").any()
-    # ...and the marker run moves the deconvolved P over the whole file: the recipe
-    # drops that file's P (not JAC_T, which is not deconvolved).
+    # ...and PFile interpolated the marker run out before deconvolving P (#259), so
+    # it no longer moves P over the whole file and the recipe keeps that file's P.
     from odas_tpw.fp07cal.series import smeared_file_wide
 
-    assert smeared_file_wide(pf, "P") and not smeared_file_wide(pf, "JAC_T")
+    assert pf.bad_buffer_report["confirmed"]["P_dP"]["interpolated_before_deconvolution"] == 64
+    assert not smeared_file_wide(pf, "P") and not smeared_file_wide(pf, "JAC_T")
     assert not smeared_file_wide(PFile(VMP_P), "P")

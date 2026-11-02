@@ -137,9 +137,11 @@ _PRE_EMPHASIS = re.compile(r"^(?P<base>\w+)_d(?P=base)$")
 # Deconvolution runs X_dX through a first-order Butterworth at
 # f_c = 1/(2*pi*diff_gain) (deconvolve.py), whose impulse response decays with
 # an e-folding time of diff_gain seconds.  A dropout therefore smears FORWARD;
-# three time constants leaves <5% of the disturbance.  (The polyfit that sets
-# the regression coefficients is global, but a few dozen bad samples in ~1e6
-# move it negligibly.)
+# three time constants leaves <5% of the disturbance.  (The two polyfits that
+# set the regression coefficients are global, and a 64-sample run of -32753
+# counts moves them far from negligibly: T1 by up to -270 mK and P by +-10 dbar
+# across the whole file.  PFile therefore interpolates marker runs out of both
+# inputs before it deconvolves (#259), which leaves only this local smear.)
 DECONV_DILATE_TAU = 3.0
 
 # Speed is smoothed with a Butterworth at 0.68/tau before use, so a bad sample

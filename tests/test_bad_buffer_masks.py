@@ -12,9 +12,11 @@ integration tests inject the sentinel into real .p files and check what
 actually comes out of epsilon and chi.
 """
 
+import re
 import struct
 import warnings
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -866,3 +868,151 @@ class TestChiMasking:
         assert np.isfinite(out.chi[0, 0]), "a lightly repaired window is usable"
         assert np.isnan(out.chi[0, 1]), "a heavily repaired window is not"
         assert np.isfinite(out.chi[0, 2])
+
+
+# ---------------------------------------------------------------------------
+# PFile: a marker run must not reach the whole file through the deconvolution
+# ---------------------------------------------------------------------------
+
+
+class TestDeconvolutionKeepsMarkersLocal:
+    """deconvolve() fits two regressions over the WHOLE file, so a marker left
+    in its inputs moved every deconvolved sample (#259). On this fixture, 64
+    sentinels moved T1 outside the pair's own 3 diff_gain mask by 110-271 mK
+    and P by 5-12 dbar, wherever the run sat; next to a rebuilt framing slot,
+    0.40-0.69 K and 19 dbar. PFile now interpolates every marker out of both
+    inputs first, with any rebuilt slot the run touches; the run stays
+    reported, and masked, exactly as before.
+
+    "Far" is outside the pair's mask: 1 s before the damage, and 3 diff_gain
+    plus 1 s after it (P_dP's diff_gain is ~20 s, so 20 s is still inside).
+    """
+
+    # 2 mK and 20 mdbar: two orders below what the markers did on main.
+    TOL: ClassVar[dict[str, float]] = {"T1": 2e-3, "T1_dT1": 2e-3, "P": 0.02, "P_dP": 0.02}
+    PAIRS: ClassVar[dict[str, tuple[str, str, bool]]] = {
+        "T1_dT1": ("T1", "T1_dT1", True),
+        "T1": ("T1", "T1_dT1", False),
+        "P_dP": ("P", "P_dP", False),
+    }
+
+    @staticmethod
+    def _load(raw: bytes, tmp_path, name="markers.p", **kw) -> PFile:
+        p = tmp_path / name
+        p.write_bytes(raw)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return PFile(p, **kw)
+
+    def _assert_far_unchanged(self, ref: PFile, pf: PFile, dx: str, damage) -> None:
+        """Nothing outside each damaged stretch's mask moved; *damage* lists
+        (first, end) times in seconds."""
+        from odas_tpw.rsi.channels import config_number
+
+        stanza = next(c for c in pf.config["channels"] if c.get("name") == dx)
+        dg = config_number(stanza["diff_gain"], key="diff_gain", channel=dx)
+        for name in (re.sub(r"_d\w+$", "", dx), dx):
+            a = np.asarray(ref.channels[name], dtype=np.float64)
+            b = np.asarray(pf.channels[name], dtype=np.float64)
+            t = ref.t_fast if a.size == ref.t_fast.size else ref.t_slow
+            far = np.ones(t.size, dtype=bool)
+            for lo, hi in damage:
+                far &= (t < lo - 1.0) | (t > hi + 3.0 * dg + 1.0)
+            assert far.sum() > 0.5 * t.size
+            assert np.abs(b - a)[far].max() < self.TOL[name], name
+
+    @pytest.mark.parametrize("cycle", [3000, 6400, 12000])
+    @pytest.mark.parametrize("channel", ["T1_dT1", "T1", "P_dP"])
+    def test_nothing_far_from_the_run_moves(
+        self, channel, cycle, src_bytes, clean_pf, tmp_path
+    ):
+        _base, dx, fast = self.PAIRS[channel]
+        inject = _inject_fast_run if fast else _inject_slow_run
+        pf = self._load(inject(src_bytes, clean_pf, channel, cycle, 64), tmp_path)
+        entry = pf.bad_buffer_report["confirmed"][channel]
+        assert entry["interpolated_before_deconvolution"] == 64
+        (start, n), = entry["spans"]
+        assert n == 64  # still reported...
+        masks = bb.sample_masks(
+            pf.bad_buffer_report,
+            len(pf.t_fast),
+            len(pf.t_slow),
+            fs_fast=pf.fs_fast,
+            fs_slow=pf.fs_slow,
+        )
+        assert (masks[channel][start : start + n] == bb.DROPPED).all()  # ...and masked
+        t0 = clean_pf.t_slow[cycle]
+        t1 = t0 + 64 / (clean_pf.fs_fast if fast else clean_pf.fs_slow)
+        self._assert_far_unchanged(clean_pf, pf, dx, [(t0, t1)])
+
+    @pytest.mark.parametrize("channel", ["T1_dT1", "T1", "P_dP"])
+    def test_a_run_next_to_a_rebuilt_slot(self, channel, src_bytes, clean_pf, tmp_path):
+        """A framing repair interpolates a rebuilt slot from its neighbours, so a
+        marker run beside it leaves a ramp from -32753 in it that no sample
+        equals the sentinel in. The two merge into one span, replaced whole."""
+        from tests.test_p_file_framing import short
+
+        _base, dx, fast = self.PAIRS[channel]
+        inject = _inject_fast_run if fast else _inject_slow_run
+        g = _geometry(src_bytes)
+        per = g["scans_per_record"] // g["n_rows"]  # matrix cycles per record
+        framed = self._load(short(src_bytes, 100), tmp_path, "framed.p")
+        pf = self._load(
+            short(inject(src_bytes, clean_pf, channel, 101 * per, 64), 100), tmp_path
+        )
+        entry = pf.bad_buffer_report["confirmed"][channel]
+        (_start, n), = entry["spans"]  # slot and run, merged
+        assert entry["interpolated_before_deconvolution"] == n > 64
+        t0 = clean_pf.t_slow[100 * per]
+        t1 = clean_pf.t_slow[101 * per] + 64 / (clean_pf.fs_fast if fast else clean_pf.fs_slow)
+        self._assert_far_unchanged(framed, pf, dx, [(t0, t1)])
+
+    def test_a_short_run_is_interpolated_too(self, src_bytes, clean_pf, tmp_path):
+        """Three sentinels are an isolated hit to the report, but in a
+        deconvolution's input they still moved T1 by up to 22 mK file-wide."""
+        raw = _inject_slow_run(src_bytes, clean_pf, "T1", 3000, 64)
+        pf = self._load(_inject_slow_run(raw, clean_pf, "T1", 15000, 3), tmp_path)
+        assert pf.bad_buffer_report["isolated"] == {"T1": 3}
+        assert pf.bad_buffer_report["confirmed"]["T1"]["interpolated_before_deconvolution"] == 67
+        damage = [(clean_pf.t_slow[c], clean_pf.t_slow[c] + k / clean_pf.fs_slow)
+                  for c, k in ((3000, 64), (15000, 3))]
+        self._assert_far_unchanged(clean_pf, pf, "T1_dT1", damage)
+
+    def test_the_other_pairs_are_untouched(self, src_bytes, clean_pf, tmp_path):
+        pf = self._load(_inject_fast_run(src_bytes, clean_pf, "T1_dT1", 3000, 64), tmp_path)
+        for name in ("T2", "T2_dT2", "P", "P_dP"):
+            np.testing.assert_array_equal(pf.channels[name], clean_pf.channels[name])
+
+    def test_without_deconvolution_the_markers_stay(self, src_bytes, clean_pf, tmp_path):
+        """The interpolation exists only for the deconvolution's sake; asked for
+        the raw counts, PFile still leaves every sample as recorded."""
+        raw = _inject_fast_run(src_bytes, clean_pf, "T1_dT1", 3000, 64)
+        pf = self._load(raw, tmp_path, deconvolve=False)
+        entry = pf.bad_buffer_report["confirmed"]["T1_dT1"]
+        (start, n), = entry["spans"]
+        counts = np.asarray(pf.channels_raw["T1_dT1"])
+        assert (counts[start : start + n] == BAD_BUFFER_SENTINEL).all()
+        assert "interpolated_before_deconvolution" not in entry
+
+    @staticmethod
+    def _bare(marker_version: bool, spans) -> PFile:
+        pf = PFile.__new__(PFile)
+        pf._marker_version = marker_version
+        pf.bad_buffer_report = {"confirmed": {"T1_dT1": {"rate": "fast", "spans": spans}}}
+        return pf
+
+    def test_a_channel_that_is_all_markers_is_left_alone(self):
+        """No sample outside the run to interpolate from: returned as it was and
+        not flagged, so fp07cal's smeared_file_wide still drops it."""
+        pf = self._bare(True, [(0, 8)])
+        raw = np.full(8, BAD_BUFFER_SENTINEL, dtype=np.int16)
+        assert pf._interp_marker_runs("T1_dT1", raw) is raw
+        entry = pf.bad_buffer_report["confirmed"]["T1_dT1"]
+        assert "interpolated_before_deconvolution" not in entry
+
+    def test_before_v6_1_the_value_is_data(self):
+        """-32753 is a marker only from v6.1 (TN-051 s3.2); before, it is a count."""
+        raw = np.array([5, 6, BAD_BUFFER_SENTINEL, 8, 9], dtype=np.int16)
+        assert self._bare(False, [])._interp_marker_runs("T1_dT1", raw) is raw
+        out = self._bare(True, [])._interp_marker_runs("T1_dT1", raw)
+        np.testing.assert_array_equal(out, [5, 6, 7, 8, 9])
