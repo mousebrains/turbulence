@@ -3648,6 +3648,10 @@ def process_file(
                             fp07_cfg.get("reference", "JAC_T")
                         )
                     ),
+                    # The plausibility check covers what the calibrated channel
+                    # is used over: the detected casts, which stratification
+                    # reads before the top/bottom adjustment shortens them (#257).
+                    range_profiles=detected_profiles,
                 )
                 # Apply calibrated temperatures back to pf.channels —
                 # both the base channels (T1, T2) and the recalibrated
@@ -3660,10 +3664,17 @@ def process_file(
                 # Only channels actually recalibrated are tagged — if the
                 # reference was missing, cal_result is empty and the channels
                 # keep the factory calibration with no tag.
-                cal_tag = (
-                    f"in-situ (Steinhart-Hart order {fp07_cfg.get('order', 2)} "
-                    f"vs {fp07_cfg.get('reference', 'JAC_T')})"
-                )
+                # The order each channel was actually fitted at: an order-2 fit
+                # that is not an FP07 curve falls back to order 1 (#257).
+                def cal_tag(ch: str) -> str:
+                    order = cal_result.get("info", {}).get(ch, {}).get(
+                        "order", fp07_cfg.get("order", 2)
+                    )
+                    return (
+                        f"in-situ (Steinhart-Hart order {order} "
+                        f"vs {fp07_cfg.get('reference', 'JAC_T')})"
+                    )
+
                 # The fitted coefficients, in the configuration's form, go to
                 # the chi noise model with the data they converted (#245): its
                 # T_0/beta_* are the bead's R(T), and the embedded ones can be
@@ -3680,10 +3691,11 @@ def process_file(
                 }
                 for ch_name, cal_data in cal_result.get("channels", {}).items():
                     pf.channels[ch_name] = cal_data
-                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag(ch_name)
                 for ch_name, cal_data in cal_result.get("fast_channels", {}).items():
                     pf.channels[ch_name] = cal_data
-                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag
+                    base = re.sub(r"_d\w+$", "", ch_name)  # T1_dT1 -> T1
+                    pf.channel_info.setdefault(ch_name, {})["calibration"] = cal_tag(base)
                 for ch_name, coeffs in fitted.items():
                     pf.channel_info.setdefault(ch_name, {})[IN_SITU_COEFFS_KEY] = {
                         k: float(v) for k, v in coeffs.items()
@@ -3693,6 +3705,7 @@ def process_file(
                 result["fp07"] = {
                     "fitted": sorted(cal_result.get("coefficients", {})),
                     "factory": dict(cal_result.get("factory", {})),
+                    "order_fallback": dict(cal_result.get("order_fallback", {})),
                 }
             except Exception as exc:
                 logger.warning("FP07 cal failed for %s: %s", p_path.name, exc)
@@ -4668,7 +4681,8 @@ def _hotel_reference_refusal(config: dict, hotel_cfg: dict, hotel_data: Any) -> 
     )
 
 
-_REASON_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+# A number standing alone, not one inside a word: "FP07" and "T_K" stay.
+_REASON_NUMBER_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:e[+-]?\d+)?")
 
 
 def _reason_kind(why: str) -> str:
@@ -4687,10 +4701,13 @@ def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
     """Run-summary lines for FP07 channels that kept the factory coefficients.
 
     *outcomes* maps a processed file to its ``{"fitted": [...], "factory":
-    {channel: reason}}``. Nothing is said when every channel of every file was
-    fitted. Otherwise each channel gets two lines: how many files kept factory
+    {channel: reason}, "order_fallback": {channel: reason}}``. Nothing is said
+    when every channel of every file was fitted at the configured order.
+    Otherwise each channel gets two lines: how many files kept factory
     coefficients against how many were fitted, with the most common kind of
-    reason, and then the files. A deployment on two calibrations is worth
+    reason, and then the files. A channel whose fit fell back to order 1
+    because the configured order's curve was not an FP07's (#257) gets two
+    lines of its own. A deployment on two calibrations is worth
     knowing about even when no file failed. The summary clips each line; the
     run log carries them whole (:func:`run_pipeline`). Covers the files
     processed in THIS run; cached files were reported by the run that made
@@ -4704,13 +4721,27 @@ def _fp07_notices(outcomes: dict[str, dict]) -> list[str]:
     fitted: Counter[str] = Counter()
     factory: dict[str, list[str]] = {}
     reasons: dict[str, Counter[str]] = {}
+    lowered: dict[str, list[str]] = {}
+    lowered_why: dict[str, Counter[str]] = {}
     for name, out in sorted(outcomes.items()):
         for ch in out.get("fitted", []):
             fitted[ch] += 1
         for ch, why in out.get("factory", {}).items():
             factory.setdefault(ch, []).append(name)
             reasons.setdefault(ch, Counter())[_reason_kind(why)] += 1
+        for ch, why in (out.get("order_fallback") or {}).items():
+            lowered.setdefault(ch, []).append(name)
+            lowered_why.setdefault(ch, Counter())[_reason_kind(why)] += 1
     lines = []
+    for ch in sorted(lowered):
+        files = lowered[ch]
+        why, n_why = lowered_why[ch].most_common(1)[0]
+        lines += [
+            f"FP07 {ch}: fitted at ORDER 1 in {len(files)} file(s) of {fitted[ch]} "
+            f"fitted (this run), because the configured order's curve was not an "
+            f"FP07's. Most common reason ({n_why} of {len(files)}): {why}.",
+            f"FP07 {ch} order-1 files: {', '.join(files)}",
+        ]
     for ch in sorted(factory):
         files = factory[ch]
         why, n_why = reasons[ch].most_common(1)[0]

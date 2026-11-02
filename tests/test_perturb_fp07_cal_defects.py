@@ -18,6 +18,7 @@ from odas_tpw.perturb.fp07_cal import (
     _reference_interval,
     fp07_calibrate,
 )
+from tests.fp07_bead import fp07_counts
 
 _CFG = {
     "name": "T1", "type": "therm", "e_b": "2.5", "a": "0", "b": "1",
@@ -44,11 +45,12 @@ class _PF:
         return False
 
 
-def _make(n=500, counts=None, ref=None, cfg=None):
-    base = 2.0 * np.sin(2.0 * np.pi * np.arange(n) / 128.0)
+def _make(n=500, counts=None, ref=None, cfg=None, period=128.0):
+    base = 2.0 * np.sin(2.0 * np.pi * np.arange(n) / period)
     rng = np.random.default_rng(0)
     T_ref = 10.0 + base + rng.standard_normal(n) * 0.005 if ref is None else ref
-    raw = 5000.0 - 800.0 * base + rng.standard_normal(n) * 2 if counts is None else counts
+    # A physical bead (#257: the fit refuses a curve no FP07 has).
+    raw = fp07_counts(10.0 + base) + rng.standard_normal(n) * 2 if counts is None else counts
     return _PF(
         channels={"T1": np.zeros(n), "JAC_T": T_ref, "P": np.linspace(0, 50, n)},
         channels_raw={"T1": raw},
@@ -197,7 +199,7 @@ def test_a_rejected_profile_reaches_neither_the_lag_nor_the_fit():
     T_ref = np.empty(n)
     T_ref[:200] = 10.0 + base[:200] + rng.standard_normal(200) * 0.005
     T_ref[200:] = 19.0 + np.linspace(0.0, 0.25, n - 200)
-    raw = 5000.0 - 800.0 * base + rng.standard_normal(n) * 2
+    raw = fp07_counts(10.0 + base) + rng.standard_normal(n) * 2
     pf = _PF(
         channels={"T1": np.zeros(n), "JAC_T": T_ref, "P": np.linspace(0, 50, n)},
         channels_raw={"T1": raw},
@@ -268,19 +270,25 @@ def test_fallback_warns_when_interval_unknown_and_inference_fails():
 
 
 def test_fp07_calibrate_passes_reference_interval_through():
-    """End to end: pchip reference + explicit interval -> no warning, filtered fit."""
-    n = 500
-    pf = _make(n=n)
+    """End to end: pchip reference + explicit interval -> no warning, filtered fit.
+
+    The signal is slow (a 15 s period) because the 1 s interval puts the
+    low-pass at 0.5 Hz: the default 2 s sinusoid sits on that cutoff, and what
+    the filter leaves of it fits a curve that is not even NTC, which the fit
+    now refuses (#257).
+    """
+    n = 64 * 60
+    pf = _make(n=n, period=64 * 15.0)
     pf.channels["SBE_T"] = pf.channels.pop("JAC_T")   # non-JAC -> bandwidth path
     # Without the interval the fallback inference fails on this reference
     # (no linear-merge knots) and says so.
     with pytest.warns(UserWarning, match="NOT low-pass filtered"):
-        fp07_calibrate(pf, [(10, 480)], reference="SBE_T", order=1)
+        fp07_calibrate(pf, [(10, n - 20)], reference="SBE_T", order=1)
     # With it, silence and a fit.
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         out = fp07_calibrate(
-            pf, [(10, 480)], reference="SBE_T", order=1, reference_interval=1.0
+            pf, [(10, n - 20)], reference="SBE_T", order=1, reference_interval=1.0
         )
     assert "T1" in out["coefficients"]
 

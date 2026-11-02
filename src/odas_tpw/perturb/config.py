@@ -1431,7 +1431,10 @@ profiles:
 
 fp07:
   calibrate: true
-  order: 2                # Steinhart-Hart polynomial order
+  order: 2                # Steinhart-Hart polynomial order; a curve no FP07
+                          # has (not NTC, local beta outside 1498-6210 K or
+                          # changing > 2%/K over the casts) falls back to
+                          # order 1, else factory (#257)
   max_lag_seconds: 10     # max cross-correlation lag [s]
   reference: "JAC_T"      # reference temperature channel
   must_be_negative: true  # expect negative lag (falling VMP)

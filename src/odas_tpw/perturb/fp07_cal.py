@@ -7,7 +7,9 @@ Steps:
   3. Per-profile cross-correlate ``diff`` of each to find the lag
   4. Median lag across profiles, gated on correlation quality
   5. Steinhart-Hart fit ``1/(T+273.15) = a0 + a1*L + ... + aN*L^order``
-  6. Apply the calibration to the slow and fast FP07 data
+  6. Refuse a curve no FP07 has over the casts it is applied to (#257): an
+     order > 1 one falls back to order 1, else the factory coefficients stay
+  7. Apply the calibration to the slow and fast FP07 data
 
 Reference: Code/fp07_calibration.m
 
@@ -40,7 +42,8 @@ import warnings
 import numpy as np
 from scipy.signal import butter, correlate, lfilter, lfilter_zi
 
-from odas_tpw.fp07cal.logr import BridgeParams, log_r
+from odas_tpw.fp07cal.logr import BridgeParams, log_r, temperature
+from odas_tpw.fp07cal.prior import FP07_BETA_K, curve_is_ntc
 from odas_tpw.processing.ct_align import shift_edge_hold
 from odas_tpw.rsi.p_file import PFile
 
@@ -324,6 +327,76 @@ def _polyfit_centered(
     return np.asarray(composed.coef, dtype=np.float64), cond
 
 
+# The local beta a per-file fit may have [K], as a factor around the sheet's
+# FP07_BETA_K. Wider than fp07-cal's 10% (BETA_MARGIN) because a per-file fit
+# corrects whatever scales the configured L, not just the bead: Taiwan 2013
+# husker's MicroRider (MR046, an early MR1000-LP) fits T1 at ~4560 K and T2 at
+# ~4270 K, steadily (MAD ~10 K) in every file it fits. Its two channels carry
+# identical, nominal-looking electronics constants; whether those or the beads
+# set the level is unverified. Fits to noise come out 14-42x off, so this only
+# catches gross errors.
+LEVEL_FACTOR = 2.0
+
+# How fast a curve's local beta may change with temperature [1/K], as
+# |ln(beta_max/beta_min)| / (T range). A bead's barely moves. #257 scanned
+# 1,340 per-file fits of 10 deployments. Of the 1,062 in CASPER 2017 West VMP
+# and doug, ASTRAL 2023, Taiwan 2017 VMP and doug, Tanaka 2015-03 and 2017-06
+# and Taiwan 2013 husker, 1,056 stay under 0.016/K (husker's steepest, over
+# 2.6 K); the other six, over 0.7-2.1 K of range (husker FSA_011, Taiwan 2017
+# doug CAS_006 and CAS_078), curve at 0.030-0.65/K. CASPER 2015 East doug's
+# 272, fitted over 0.03-2 K, curve at a median 0.12/K, and chi converts the
+# gradient through that slope squared (up to 3x at a file's extremes). Two of
+# Tanaka 2017-07's six fits, DAT_028 and DAT_048, are caught too.
+MAX_BETA_CURVATURE = 0.02
+
+
+def _not_an_fp07(coeffs: np.ndarray, L_range: tuple[float, float]) -> str:
+    """Why the curve ``1/T_K = sum a_i L^i`` is not an FP07's over *L_range*,
+    or ``""`` when it is (issue #257).
+
+    Three rules, over the L range the curve is applied to:
+
+    1. NTC: T falls as L rises, and ``1/T_K`` > 0 (``fp07-cal``'s #242), so
+       the converted temperature cannot fold back inside the data;
+    2. a local beta ``1/(d(1/T_K)/dL)`` within :data:`LEVEL_FACTOR` of the
+       FP07 sheet's (``prior.FP07_BETA_K``): a gross check, since a per-file
+       fit also absorbs whatever scales the configured L;
+    3. a local beta that changes by at most :data:`MAX_BETA_CURVATURE` per
+       kelvin: curvature no bead has is curvature fitted to noise.
+
+    ``fp07-cal`` checks the level more tightly (``prior.fp07_slope``) and
+    chooses the order by held-out error; a per-file fit can do neither.
+    """
+    # Each reason leads with a cause free of numbers, and keeps its numbers in
+    # the parentheses: the run summary groups files on the text before " (".
+    where = "over the L range the data span"
+    if not curve_is_ntc(coeffs, L_range):
+        return f"not NTC (T must fall as L rises, with 1/T_K > 0, {where})"
+    c = np.asarray(coeffs, dtype=np.float64)
+    L = np.linspace(L_range[0], L_range[1], 201)
+    d_inv = sum(i * a * L ** (i - 1) for i, a in enumerate(c) if i)
+    beta = 1.0 / np.asarray(d_inv, dtype=np.float64)
+    b_lo, b_hi = float(np.min(beta)), float(np.max(beta))
+    allowed = (FP07_BETA_K[0] / LEVEL_FACTOR, FP07_BETA_K[1] * LEVEL_FACTOR)
+    if not (allowed[0] <= b_lo and b_hi <= allowed[1]):
+        return (
+            f"a slope no FP07 has (local beta 1/(d(1/T_K)/dL) {b_lo:.0f}-{b_hi:.0f} K "
+            f"{where}, outside {allowed[0]:.0f}-{allowed[1]:.0f} K, twice the FP07 "
+            f"sheet's {FP07_BETA_K[0]:.0f}-{FP07_BETA_K[1]:.0f} K either way)"
+        )
+    T = temperature(L, c)
+    span_K = float(np.max(T) - np.min(T))
+    curvature = float(np.log(b_hi / b_lo)) / span_K if span_K > 0 else 0.0
+    if curvature > MAX_BETA_CURVATURE:
+        return (
+            f"curvature no bead has (local beta {b_lo:.0f}-{b_hi:.0f} K over the "
+            f"{span_K:.3g} K the data span, {100 * curvature:.3g}%/K against at most "
+            f"{100 * MAX_BETA_CURVATURE:.0f}%/K: curvature fitted to noise, typically over "
+            f"too little temperature range)"
+        )
+    return ""
+
+
 def fp07_calibrate(
     pf: PFile,
     profiles: list[tuple[int, int]],
@@ -333,6 +406,7 @@ def fp07_calibrate(
     must_be_negative: bool = True,
     min_corr: float = MIN_LAG_CORR,
     reference_interval: float | None = None,
+    range_profiles: list[tuple[int, int]] | None = None,
 ) -> dict:
     """Perform in-situ FP07 calibration.
 
@@ -362,6 +436,18 @@ def fp07_calibrate(
         ``fp07.reference_interval`` config key. ``None`` falls back to
         inferring it from the merged array, which only works for a linear
         merge and warns when it cannot.
+    range_profiles : list of (start, end), optional
+        The profiles whose samples the calibrated channel is USED over, for
+        the plausibility check (default *profiles*). The pipeline passes the
+        detected casts, which the top-trim and bottom adjustment have not yet
+        shortened, because stratification reads them.
+
+    A fitted curve must be an FP07's over the L range of every sample of
+    *range_profiles* and of the fit itself (:func:`_not_an_fp07`), since it
+    is applied to all of them and a curve whose vertex lies inside them folds
+    the temperature back. An order > 1 curve that is not is refitted at
+    order 1; if that is not either, the channel keeps the factory
+    coefficients (issue #257).
 
     Returns
     -------
@@ -377,14 +463,17 @@ def fp07_calibrate(
         coefficients : dict mapping channel name -> Steinhart-Hart coefficients
         info : dict of per-channel calibration stats
         factory : dict mapping channel name -> why it KEPT the factory
-            coefficients (the lag gate, the bridge rail, too few samples).
-            Every FP07 channel the fit considered lands in exactly one of
-            ``coefficients`` and ``factory``, so a caller can report what
-            happened instead of finding out from a warning.
+            coefficients (the lag gate, the bridge rail, too few samples, a
+            curve no FP07 has). Every FP07 channel the fit considered lands
+            in exactly one of ``coefficients`` and ``factory``, so a caller
+            can report what happened instead of finding out from a warning.
+        order_fallback : dict mapping channel name -> why its order-*order*
+            fit was replaced by an order-1 fit (the channel is in
+            ``coefficients``, at order 1; ``info[ch]["order"]`` says so).
     """
     empty: dict = {
         "channels": {}, "fast_channels": {}, "lags": {}, "coefficients": {}, "info": {},
-        "factory": {},
+        "factory": {}, "order_fallback": {},
     }
     fp07_names = _find_fp07_channels(pf)
     if reference not in pf.channels:
@@ -411,6 +500,7 @@ def fp07_calibrate(
         "coefficients": {},
         "info": {},
         "factory": {},
+        "order_fallback": {},
     }
 
     for ch_name in fp07_names:
@@ -570,6 +660,42 @@ def fp07_calibrate(
             warnings.warn(f"{ch_name}: {exc}", stacklevel=2)
             result["factory"][ch_name] = str(exc)
             continue
+
+        # Is it an FP07's curve where it will be applied (#257)? Every sample of
+        # every profile the products use, not only the accepted segments.
+        used = profiles if range_profiles is None else range_profiles
+        L_used = [L_fit_src[s : e + 1][~clipped[s : e + 1]] for s, e in used]
+        L_used.append(L_fit)
+        L_all = np.concatenate(L_used)
+        L_all = L_all[np.isfinite(L_all)]
+        L_range = (float(np.min(L_all)), float(np.max(L_all)))
+        why = _not_an_fp07(coeffs, L_range)
+        order_used = order
+        if why and order > 1:
+            coeffs_1, cond_1 = _polyfit_centered(L_fit, target, 1)
+            why_1 = _not_an_fp07(coeffs_1, L_range)
+            if not why_1:
+                result["order_fallback"][ch_name] = (
+                    f"the order-{order} fit is not an FP07 curve: {why}"
+                )
+                warnings.warn(
+                    f"{ch_name}: the order-{order} fit is not an FP07 curve: {why}. "
+                    f"Using the order-1 fit, which is one.",
+                    stacklevel=2,
+                )
+                coeffs, cond, order_used, why = coeffs_1, cond_1, 1, ""
+            else:
+                why = f"at order {order}: {why}; nor at order 1: {why_1}"
+        elif why:
+            why = f"at order {order}: {why}"
+        if why:
+            warnings.warn(
+                f"{ch_name}: the in-situ fit is not an FP07 curve {why}. Leaving the "
+                f"factory calibration in place.",
+                stacklevel=2,
+            )
+            result["factory"][ch_name] = f"fit is not an FP07 curve {why}"
+            continue
         result["coefficients"][ch_name] = coeffs
 
         def _apply_cal(raw: np.ndarray, _bridge=bridge, _coeffs=coeffs) -> np.ndarray:
@@ -611,6 +737,8 @@ def fp07_calibrate(
             "n_profiles_unscored": n_unscored,
             "n_clipped": n_clipped,
             "condition_number": cond,
+            "order": order_used,
+            "L_range_checked": list(L_range),
             "T_range": T_range,
             "coefficients": coeffs.tolist(),
         }

@@ -121,7 +121,7 @@ Controls calibration of FP07 thermistors against a reference sensor.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `calibrate` | bool | `true` | Enable FP07 calibration. A fitted channel's chi noise model uses the fit too (its bead coefficients `T_0`, `beta_1`, `beta_2` and, for order 3, `beta_3`), inverting the fitted curve exactly (issue #245) |
-| `order` | int | `2` | Steinhart-Hart polynomial order |
+| `order` | int | `2` | Steinhart-Hart polynomial order. The fitted curve must be an FP07's over every detected cast it is applied to, by three rules: NTC (no fold-back); a local beta `1/(d(1/T_K)/dL)` within 1498-6210 K, twice the FP07 sheet's 2995-3105 K either way (a gross check: a per-file fit also corrects whatever scales the configured L, and Taiwan 2013 husker fits ~4300-4600 K in every file, cause unverified); and a local beta changing by at most 2%/K across those casts (1,056 of the 1,062 per-file fits of eight other deployments stay under 1.6%/K, and the other six are fits over 0.7-2.1 K; an order-2 fit over a fraction of a kelvin curves at ~12%/K, and chi converts the gradient through that slope squared). An order > 1 curve that is not falls back to order 1; a channel with no such curve at either order keeps the factory coefficients. The run summary names both (issue #257: an order-2 fit over a fraction of a kelvin folded the temperature back in 88 of 272 CASPER 2015 East doug fits). The 8 K range warning stays a warning |
 | `max_lag_seconds` | float | `10` | Max cross-correlation lag [seconds] |
 | `reference` | string | `"JAC_T"` | Reference temperature channel name |
 | `must_be_negative` | bool | `true` | Restrict lag to negative values (FP07 leads reference) |

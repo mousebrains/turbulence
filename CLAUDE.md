@@ -189,6 +189,19 @@ Facts that are easy to get wrong:
   entry `interpolated_before_deconvolution`. Only a run it could not
   interpolate still drops the channel from that file whole (`files_dropped`).
   v6.0 header-word-16 records only warn in PFile and are still paired.
+- **perturb's per-file fit refuses a curve no FP07 has** (#257), over the L
+  range of every DETECTED cast it is applied to, not just the segments it was
+  fitted on: NTC; local beta within 2x of `prior.FP07_BETA_K` (NOT fp07-cal's
+  10%: Taiwan 2013 husker's MR046, an early MR1000-LP, fits T1 ~4560 K and T2
+  ~4270 K steadily in every file, cause unverified: its identical, nominal
+  electronics constants or its beads); local beta changing by
+  at most 2%/K (`MAX_BETA_CURVATURE`; curvature fitted to noise, which chi
+  converts squared). A 10% level or 10% total-variation rule refused all of
+  husker's fits. An order > 1 curve that fails is refitted at
+  order 1 (`order_fallback`, tagged "order 1" on the product); one that fails
+  at both keeps the factory coefficients. Both are run-summary notices. The
+  8 K range warning is still only a warning: a narrow-range order-2 curve that
+  IS an FP07's is kept, so plausible deployments are unchanged.
 - **perturb refuses its own per-file fit against a hotel reference** unless
   `fp07.allow_hotel_reference: true`. A file the glider CTD did not cover
   keeps the factory coefficients while its neighbors are fitted, putting one
