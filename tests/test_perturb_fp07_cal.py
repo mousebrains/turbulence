@@ -279,23 +279,12 @@ class TestFP07Calibrate:
             "adc_bits": "16",
         }
 
-        # Build raw counts that will produce reasonable RT_R0 values.
-        # log_r does: Z = factor*(counts - a)/b, RT_R0 = ln((1-Z)/(1+Z))
-        # factor = (5 / 2^16) * 2/(1*2.5) = 0.00006103515625
-        # We want Z values near 0 to get RT_R0 near 0, so counts near 0.
-        # Use counts that produce a monotonic RT_R0 correlated with T_ref.
-        # Steinhart-Hart: 1/(T+273.15) = a0 + a1*RT_R0 + a2*RT_R0^2
-        # We reverse-engineer counts from T_ref via an approximate relationship.
-        factor = (5.0 / 2**16) * 2.0 / (1.0 * 2.5)
-        # Target RT_R0 from T_ref via an approximate Steinhart-Hart (linear approx)
-        target_inv_T = 1.0 / (T_ref + 273.15)
-        # Approximate: RT_R0 ~ (target_inv_T - mean) / some scale
-        rt_r0_approx = (target_inv_T - np.mean(target_inv_T)) * 500.0
-        # Invert log_r: RT_R0 = ln((1-Z)/(1+Z)) => Z = (1-exp(RT_R0))/(1+exp(RT_R0))
-        exp_rt = np.exp(rt_r0_approx)
-        Z = (1.0 - exp_rt) / (1.0 + exp_rt)
-        # Z = factor * counts => counts = Z / factor
-        raw_counts_slow = Z / factor
+        # Raw counts of a physical bead tracking T_ref. (An L scaled by 500, as
+        # this used to build, is a local beta of 500 K, which the fit now
+        # refuses as no FP07's: issue #257.)
+        from tests.fp07_bead import fp07_counts
+
+        raw_counts_slow = fp07_counts(T_ref)
 
         # Fast-rate raw counts: upsample
         raw_counts_fast = np.repeat(raw_counts_slow, ratio) + rng.normal(0, 0.5, n_fast)

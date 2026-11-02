@@ -333,10 +333,19 @@ def is_ntc(fit: FitResult, n: int = 201) -> bool:
     and a slope 20x too steep or too shallow (see :func:`plausibility` and
     :func:`fp07_slope`).
     """
-    lo, hi = fit.L_range
+    return curve_is_ntc(fit.coeffs, fit.L_range, n)
+
+
+def curve_is_ntc(coeffs: np.ndarray, L_range: tuple[float, float], n: int = 201) -> bool:
+    """:func:`is_ntc` for any curve ``1/T_K = sum a_i L^i`` over any L range.
+
+    perturb's per-file fit uses it over the L range its curve is APPLIED to
+    (issue #257), which is wider than the range it was fitted on.
+    """
+    lo, hi = L_range
     if not (np.isfinite(lo) and np.isfinite(hi)):
         return False
-    inv, s = _inv_and_dTdL(fit.coeffs, np.linspace(lo, hi, n))
+    inv, s = _inv_and_dTdL(np.asarray(coeffs, dtype=np.float64), np.linspace(lo, hi, n))
     return bool(np.all(inv > 0) and np.all(s < 0))
 
 

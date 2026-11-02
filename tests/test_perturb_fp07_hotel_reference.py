@@ -298,6 +298,7 @@ class TestNoticeReachesTheRun:
             "fitted": [],
             "factory": {"T1": "reference channel 'NOPE' not found",
                         "T2": "reference channel 'NOPE' not found"},
+            "order_fallback": {},
         }
 
     def test_run_pipeline_aggregates_worker_outcomes(self, tmp_path, caplog):
