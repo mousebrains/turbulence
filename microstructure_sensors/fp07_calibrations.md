@@ -331,17 +331,17 @@ MR1000RDL-EM SN 433 T1. 1 calibration, 2023-05-31 to 2023-06-07.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 433 T1 on Slocum osu684 | 2023-05-31 | 2023-06-07 | SBE-41CP glider CTD SN 9421 | — | 3 (auto) | 108 / 103 | 3.81 to 29.18 | 5.4 | 12.3 | 1.8 (12) | `short` |
+| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 433 T1 on Slocum osu684 | 2023-05-31 | 2023-06-07 | SBE-41CP glider CTD SN 9421 | — | 3 (auto) | 108 / 103 | 3.81 to 29.18 | 5.4 | 11.6 | 1.8 (12) | `short` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 285.747011 | 3042.0886 | 301514.8 | -4356964.3 | -2.9 | 0.99939 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 285.747010 | 3042.0902 | 301488.4 | -4374355.4 | -2.9 | 0.99939 | 6 | 0.6828 | 4.096 | 16 |
 
 Notes:
 
-1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.512 m, tau = 1.89 s. 7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the temperature lag (+6.9 s), which would make the CTD's response negative, so that clock estimate is unreliable. The temperature lag itself passed the sharpness gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
+1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.511 m, tau = 1.89 s. 7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the temperature lag (+6.9 s), which would make the CTD's response negative, so that clock estimate is unreliable. The temperature lag itself passed the sharpness gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.006 mK over valid_T_degC. Held-out error 11.62 mK (was 12.28 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30), and equal the previous record's. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2239
 
@@ -349,12 +349,12 @@ From **ARCTERX-2023 Interior** (MR1000RDL-EM SN 433 T1, 2023-05-31 to 2023-06-07
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 285.747011 | 3042.0886 | 301514.8 | -4356964.3 |
+| 285.747010 | 3042.0902 | 301488.4 | -4374355.4 |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
-- **shape**: ±13.3 mK over a 5-10 K span: the sheet's 5 mK and the source's 12.3 mK held-out error, in quadrature.
+- **shape**: ±12.7 mK over a 5-10 K span: the sheet's 5 mK and the source's 11.6 mK held-out error, in quadrature.
 - **fitted range**: 3.81 to 29.18 °C.
-- **No unflagged calibration: every calibration of T2239 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged short). Its shape term adds that fit's 12.3 mK held-out error to the sheet's 5 mK in quadrature.**
+- **No unflagged calibration: every calibration of T2239 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged short). Its shape term adds that fit's 11.6 mK held-out error to the sheet's 5 mK in quadrature.**
 - No target given, so this assumes the source's electronics (MR1000RDL-EM SN 433 T1).
 - The source is also the most recent calibration.
 - Every number here is relative to the source's reference (SBE-41CP glider CTD SN 9421), whose calibration date is not recorded. Its own error is not included.
@@ -366,17 +366,17 @@ MR1000RDL-EM SN 433 T2. 1 calibration, 2023-05-31 to 2023-06-07.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 433 T2 on Slocum osu684 | 2023-05-31 | 2023-06-07 | SBE-41CP glider CTD SN 9421 | — | 3 (auto) | 108 / 103 | 3.81 to 29.18 | 5.7 | 12.7 | 1.6 (12) | `short` |
+| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 433 T2 on Slocum osu684 | 2023-05-31 | 2023-06-07 | SBE-41CP glider CTD SN 9421 | — | 3 (auto) | 108 / 103 | 3.81 to 29.18 | 5.7 | 11.6 | 1.6 (12) | `short` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 286.833960 | 3058.7018 | 307728.4 | -3036194.7 | -6.7 | 0.99893 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 286.833959 | 3058.7035 | 307704.1 | -3044116.9 | -6.7 | 0.99893 | 6 | 0.6828 | 4.096 | 16 |
 
 Notes:
 
-1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.620 m, tau = 2.41 s. 7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the temperature lag (+6.9 s), which would make the CTD's response negative, so that clock estimate is unreliable. The temperature lag itself passed the sharpness gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
+1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.619 m, tau = 2.41 s. 7.7 days. The pressure-matched clock offset (+9.8 s at r = 0.45) exceeds the temperature lag (+6.9 s), which would make the CTD's response negative, so that clock estimate is unreliable. The temperature lag itself passed the sharpness gate. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.006 mK over valid_T_degC. Held-out error 11.58 mK (was 12.73 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30), and equal the previous record's. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2240
 
@@ -384,12 +384,12 @@ From **ARCTERX-2023 Interior** (MR1000RDL-EM SN 433 T2, 2023-05-31 to 2023-06-07
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 286.833960 | 3058.7018 | 307728.4 | -3036194.7 |
+| 286.833959 | 3058.7035 | 307704.1 | -3044116.9 |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
-- **shape**: ±13.7 mK over a 5-10 K span: the sheet's 5 mK and the source's 12.7 mK held-out error, in quadrature.
+- **shape**: ±12.6 mK over a 5-10 K span: the sheet's 5 mK and the source's 11.6 mK held-out error, in quadrature.
 - **fitted range**: 3.81 to 29.18 °C.
-- **No unflagged calibration: every calibration of T2240 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged short). Its shape term adds that fit's 12.7 mK held-out error to the sheet's 5 mK in quadrature.**
+- **No unflagged calibration: every calibration of T2240 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged short). Its shape term adds that fit's 11.6 mK held-out error to the sheet's 5 mK in quadrature.**
 - No target given, so this assumes the source's electronics (MR1000RDL-EM SN 433 T2).
 - The source is also the most recent calibration.
 - Every number here is relative to the source's reference (SBE-41CP glider CTD SN 9421), whose calibration date is not recorded. Its own error is not included.
@@ -401,17 +401,17 @@ MR1000RDL-EM SN 435 T1. 1 calibration, 2023-05-31 to 2023-08-05.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 435 T1 on Slocum osu685 | 2023-05-31 | 2023-08-05 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 154 / 152 | 3.50 to 30.46 | 8.0 | 17.8 | 4.4 (12) | `screened`, `episode` |
+| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 435 T1 on Slocum osu685 | 2023-05-31 | 2023-08-05 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 592 / 152 | 3.50 to 30.46 | 8.0 | 16.1 | 4.4 (12) | `screened`, `episode` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 284.114915 | 3054.8701 | 268522.9 | — | -12.3 | 0.99921 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 284.114881 | 3054.8868 | 268683.4 | — | -12.3 | 0.99921 | 6 | 0.6828 | 4.096 | 16 |
 
 Notes:
 
-1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.512 m, tau = 1.43 s. Files A685_0005-0618 only: the fit stops at 2023-08-05, when the nose flooded. It includes a +8 to +16 mK episode, 2023-06-19 to 07-01, while the EM channel was pegged (one block offset of -11 mK). Profiles gated on fall rate only, because U_EM was unreliable in 2023. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
+1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.509 m, tau = 1.43 s. Files A685_0005-0618 only: the fit stops at 2023-08-05, when the nose flooded. It includes a +8 to +16 mK episode, 2023-06-19 to 07-01, while the EM channel was pegged (one block offset of -11 mK). Profiles gated on fall rate only, because U_EM was unreliable in 2023. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.068 mK over valid_T_degC. Held-out error 16.12 mK (was 17.78 by v0.4.0-44's scoring). fit.n_files is the number of files the bead was alive in, over every file with a detected profile (PR #262, 2026-10-30), replacing the fit subsample's 154; first and last were already the alive span. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2244
 
@@ -419,12 +419,12 @@ From **ARCTERX-2023 Interior** (MR1000RDL-EM SN 435 T1, 2023-05-31 to 2023-08-05
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 284.114915 | 3054.8701 | 268522.9 | — |
+| 284.114881 | 3054.8868 | 268683.4 | — |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
-- **shape**: ±18.5 mK over a 5-10 K span: the sheet's 5 mK and the source's 17.8 mK held-out error, in quadrature.
+- **shape**: ±16.9 mK over a 5-10 K span: the sheet's 5 mK and the source's 16.1 mK held-out error, in quadrature.
 - **fitted range**: 3.50 to 30.46 °C.
-- **No unflagged calibration: every calibration of T2244 is flagged episode, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged screened, episode). Its shape term adds that fit's 17.8 mK held-out error to the sheet's 5 mK in quadrature.**
+- **No unflagged calibration: every calibration of T2244 is flagged episode, so this prior comes from its widest-range calibration (ARCTERX-2023 Interior, flagged screened, episode). Its shape term adds that fit's 16.1 mK held-out error to the sheet's 5 mK in quadrature.**
 - No target given, so this assumes the source's electronics (MR1000RDL-EM SN 435 T1).
 - The source is also the most recent calibration.
 - Every number here is relative to the source's reference (SBE-41CP glider CTD SN 9410), whose calibration date is not recorded. Its own error is not included.
@@ -436,17 +436,17 @@ MR1000RDL-EM SN 435 T2. 1 calibration, 2023-05-31 to 2023-06-12.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 435 T2 on Slocum osu685 | 2023-05-31 | 2023-06-12 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 131 / 126 | 3.51 to 29.33 | 5.5 | 11.0 | 1.9 (12) | `screened` |
+| 1 | ARCTERX-2023 Interior | MR1000RDL-EM SN 435 T2 on Slocum osu685 | 2023-05-31 | 2023-06-12 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 131 / 126 | 3.51 to 29.33 | 5.5 | 9.7 | 1.9 (12) | `screened` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 281.195303 | 3017.6050 | 273292.8 | — | 0.2 | 0.99943 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 281.195321 | 3017.5954 | 273176.2 | — | 0.2 | 0.99943 | 6 | 0.6828 | 4.096 | 16 |
 
 Notes:
 
-1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.460 m, tau = 1.18 s. Files A685_0005-0157 only: from 2023-06-12 17:17Z T2 sat on the bridge rail. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
+1. **ARCTERX-2023 Interior**: Sensor geometry fitted jointly: dz = 0.462 m, tau = 1.19 s. Files A685_0005-0157 only: from 2023-06-12 17:17Z T2 sat on the bridge rail. Profiles gated on fall rate only, because U_EM was unreliable in 2023. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.034 mK over valid_T_degC. Held-out error 9.66 mK (was 11.03 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30), and equal the previous record's. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data.
 
 ### Prior for a fresh deployment of T2245
 
@@ -454,7 +454,7 @@ From **ARCTERX-2023 Interior** (MR1000RDL-EM SN 435 T2, 2023-05-31 to 2023-06-12
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 281.195303 | 3017.6050 | 273292.8 | — |
+| 281.195321 | 3017.5954 | 273176.2 | — |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
 - **shape**: ±5 mK over a 5-10 K span.
@@ -471,13 +471,13 @@ MR1000RDL-EM SN 433 T1. 1 calibration, 2025-02-04 to 2025-02-10.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 433 T1 on Slocum osu684 | 2025-02-04 | 2025-02-10 | SBE-41CP glider CTD SN 9421 | — | 2 (auto) | 45 / 19 | 5.04 to 26.12 | 5.3 | 16.4 | 1.8 (3) | `short` |
+| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 433 T1 on Slocum osu684 | 2025-02-04 | 2025-02-10 | SBE-41CP glider CTD SN 9421 | — | 2 (auto) | 119 / 19 | 5.04 to 26.12 | 5.3 | 13.1 | 1.7 (3) | `short` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 284.869368 | 3062.1855 | 301056.9 | — | -2.9 | 0.99939 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 284.869521 | 3062.1687 | 300078.6 | — | -2.9 | 0.99939 | 6 | 0.6828 | 4.096 | 16 |
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
@@ -487,7 +487,7 @@ FP07 time constant, single-pole equivalent over the band (see [the FP07 time con
 
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.840 m, tau = 2.94 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. Only 3 blocks, too few to test for drift. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.847 m, tau = 2.94 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. Only 3 blocks, too few to test for drift. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.162 mK over valid_T_degC. Held-out error 13.05 mK (was 16.4 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30); they replaced the fit subsample's span (45 files, 2025-02-04T01:06:01Z to 2025-02-10T01:21:19Z). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
 
 ### Prior for a fresh deployment of T2809
 
@@ -495,12 +495,12 @@ From **ARCTERX-2025 Interior** (MR1000RDL-EM SN 433 T1, 2025-02-04 to 2025-02-10
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 284.869368 | 3062.1855 | 301056.9 | — |
+| 284.869521 | 3062.1687 | 300078.6 | — |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
-- **shape**: ±17.1 mK over a 5-10 K span: the sheet's 5 mK and the source's 16.4 mK held-out error, in quadrature.
+- **shape**: ±14.0 mK over a 5-10 K span: the sheet's 5 mK and the source's 13.1 mK held-out error, in quadrature.
 - **fitted range**: 5.04 to 26.12 °C.
-- **No unflagged calibration: every calibration of T2809 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2025 Interior, flagged short). Its shape term adds that fit's 16.4 mK held-out error to the sheet's 5 mK in quadrature.**
+- **No unflagged calibration: every calibration of T2809 is flagged short, so this prior comes from its widest-range calibration (ARCTERX-2025 Interior, flagged short). Its shape term adds that fit's 13.1 mK held-out error to the sheet's 5 mK in quadrature.**
 - No target given, so this assumes the source's electronics (MR1000RDL-EM SN 433 T1).
 - The source is also the most recent calibration.
 - Every number here is relative to the source's reference (SBE-41CP glider CTD SN 9421), whose calibration date is not recorded. Its own error is not included.
@@ -512,13 +512,13 @@ MR1000RDL-EM SN 433 T2. 1 calibration, 2025-02-04 to 2025-02-10.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 433 T2 on Slocum osu684 | 2025-02-04 | 2025-02-10 | SBE-41CP glider CTD SN 9421 | — | 2 (auto) | 45 / 19 | 5.04 to 26.12 | 7.0 | 21.6 | 5.4 (3) | `episode`, `short` |
+| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 433 T2 on Slocum osu684 | 2025-02-04 | 2025-02-10 | SBE-41CP glider CTD SN 9421 | — | 2 (auto) | 119 / 19 | 5.04 to 26.12 | 7.0 | 16.0 | 5.4 (3) | `episode`, `short` |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 281.249282 | 3013.9613 | 299877.0 | — | -6.7 | 0.99893 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 281.249291 | 3013.9562 | 299766.6 | — | -6.7 | 0.99893 | 6 | 0.6828 | 4.096 | 16 |
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
@@ -528,7 +528,7 @@ FP07 time constant, single-pole equivalent over the band (see [the FP07 time con
 
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.860 m, tau = 2.92 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the failure; that episode is inside the fit and inflates the block scatter. Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.859 m, tau = 2.91 s. Six days and 19 profiles. The wing failed at 2025-02-06 05:57Z, and the fit includes the climbs after it. T2 read +20 to +27 mK from about 4.5 h before the failure; that episode is inside the fit and inflates the block scatter. Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record (git v0.4.0-44-g5f7f1112353e): the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.015 mK over valid_T_degC. Held-out error 16.02 mK (was 21.55 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30); they replaced the fit subsample's span (45 files, 2025-02-04T01:06:01Z to 2025-02-10T01:21:19Z). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant: Speed from the glider flight model (the proc/ pre- and post-wing-failure 'flight' runs together); U_EM read 4-15% higher (flight/EM speed 0.87 before the wing failure, 0.96 after; proc/WORKFLOW.md), which would move W_ref, not tau at W_ref.
 
 ### Prior for a fresh deployment of T2810
 
@@ -536,12 +536,12 @@ From **ARCTERX-2025 Interior** (MR1000RDL-EM SN 433 T2, 2025-02-04 to 2025-02-10
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 281.249282 | 3013.9613 | 299877.0 | — |
+| 281.249291 | 3013.9562 | 299766.6 | — |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
-- **shape**: ±22.1 mK over a 5-10 K span: the sheet's 5 mK and the source's 21.6 mK held-out error, in quadrature.
+- **shape**: ±16.8 mK over a 5-10 K span: the sheet's 5 mK and the source's 16.0 mK held-out error, in quadrature.
 - **fitted range**: 5.04 to 26.12 °C.
-- **No unflagged calibration: every calibration of T2810 is flagged short or episode, so this prior comes from its widest-range calibration (ARCTERX-2025 Interior, flagged episode, short). Its shape term adds that fit's 21.6 mK held-out error to the sheet's 5 mK in quadrature.**
+- **No unflagged calibration: every calibration of T2810 is flagged short or episode, so this prior comes from its widest-range calibration (ARCTERX-2025 Interior, flagged episode, short). Its shape term adds that fit's 16.0 mK held-out error to the sheet's 5 mK in quadrature.**
 - No target given, so this assumes the source's electronics (MR1000RDL-EM SN 433 T2).
 - The source is also the most recent calibration.
 - Every number here is relative to the source's reference (SBE-41CP glider CTD SN 9421), whose calibration date is not recorded. Its own error is not included.
@@ -553,13 +553,13 @@ MR1000RDL-EM SN 435 T1. 1 calibration, 2025-02-04 to 2025-04-10.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 435 T1 on Slocum osu685 | 2025-02-04 | 2025-04-10 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 103 / 99 | 3.61 to 27.57 | 5.5 | 12.7 | 1.4 (20) | — |
+| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 435 T1 on Slocum osu685 | 2025-02-04 | 2025-04-10 | SBE-41CP glider CTD SN 9410 | — | 2 (auto) | 797 / 99 | 3.61 to 27.57 | 5.5 | 11.5 | 1.4 (20) | — |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 286.654006 | 3051.5945 | 259738.6 | — | -12.3 | 0.99921 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 286.653995 | 3051.5958 | 259796.4 | — | -12.3 | 0.99921 | 6 | 0.6828 | 4.096 | 16 |
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
@@ -569,7 +569,7 @@ FP07 time constant, single-pole equivalent over the band (see [the FP07 time con
 
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.665 m, tau = 2.10 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.18), not significant. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.069 < max(3 x 0.021, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em). The pair's 20 Hz power ratio changed between the halves (ratio-shift): over the whole deployment the beads look matched.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.664 m, tau = 2.10 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.022 +/- 0.015 mK/day (p = 0.17), not significant. The previous record was the rerun after the streaming-pass fix (#237), its coefficients bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record: the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.011 mK over valid_T_degC. Held-out error 11.54 mK (was 12.69 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30); they replaced the fit subsample's span (103 files, 2025-02-04T07:42:26Z to 2025-04-10T15:36:58Z). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.069 < max(3 x 0.021, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em). The pair's 20 Hz power ratio changed between the halves (ratio-shift): over the whole deployment the beads look matched.
 
 ### Prior for a fresh deployment of T2811
 
@@ -577,7 +577,7 @@ From **ARCTERX-2025 Interior** (MR1000RDL-EM SN 435 T1, 2025-02-04 to 2025-04-10
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 286.654006 | 3051.5945 | 259738.6 | — |
+| 286.653995 | 3051.5958 | 259796.4 | — |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
 - **shape**: ±5 mK over a 5-10 K span.
@@ -593,13 +593,13 @@ MR1000RDL-EM SN 435 T2. 1 calibration, 2025-02-04 to 2025-04-10.
 
 | # | deployment | instrument | first | last | reference | cal. age [y] | order | files / profiles | T range [°C] | rms [mK] | held-out [mK] | block SD [mK] | flags |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 435 T2 on Slocum osu685 | 2025-02-04 | 2025-04-10 | SBE-41CP glider CTD SN 9410 | — | 3 (auto) | 103 / 99 | 3.61 to 27.57 | 5.9 | 10.6 | 2.3 (20) | — |
+| 1 | ARCTERX-2025 Interior | MR1000RDL-EM SN 435 T2 on Slocum osu685 | 2025-02-04 | 2025-04-10 | SBE-41CP glider CTD SN 9410 | — | 3 (auto) | 797 / 99 | 3.61 to 27.57 | 5.9 | 9.3 | 2.3 (20) | — |
 
 Coefficients and the bridge constants that define their L:
 
 | # | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] | a | b | g | e_b | adc_fs [V] | adc_bits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 287.735112 | 3025.1544 | 254553.1 | 16278810.3 | 0.2 | 0.99943 | 6 | 0.6828 | 4.096 | 16 |
+| 1 | 287.735117 | 3025.1494 | 254534.9 | 17419377.8 | 0.2 | 0.99943 | 6 | 0.6828 | 4.096 | 16 |
 
 FP07 time constant, single-pole equivalent over the band (see [the FP07 time constant](#fp07-time-constant-response)); 16-84% intervals:
 
@@ -609,7 +609,7 @@ FP07 time constant, single-pole equivalent over the band (see [the FP07 time con
 
 Notes:
 
-1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.736 m, tau = 2.32 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over 66 days. Order 3 beat order 2 by 1.4 mK of held-out error. This record is the rerun after the streaming-pass fix (#237); its coefficients are bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.069 < max(3 x 0.021, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em); see T2811's entry.
+1. **ARCTERX-2025 Interior**: Sensor geometry fitted jointly: dz = 0.737 m, tau = 2.33 s. Drift over the deployment, from the streaming pass over all 757 profiles with the fitted geometry removed: +0.074 +/- 0.020 mK/day (p = 0.004), about +4.9 mK over 66 days. Order 3 beat order 2 by 1.36 mK of held-out error. The previous record was the rerun after the streaming-pass fix (#237), its coefficients bit-identical to the fit by committed code (git v0.4.0-44-g5f7f1112353e). Regenerated 2026-10-30 by git v0.4.0-57-gdaee18c1b677 (after #246 and #249) from the same fit configuration as the previous record: the order is unchanged, and #246's median-centered robust loops moved the curve by at most 0.012 mK over valid_T_degC. Held-out error 9.26 mK (was 10.55 by v0.4.0-44's scoring). first, last and fit.n_files are the time the bead was alive, over every file with a detected profile (PR #262, 2026-10-30); they replaced the fit subsample's span (103 files, 2025-02-04T07:42:26Z to 2025-04-10T15:36:58Z). Reference: Serial from the glider's proglets.dat; its calibration date is not in the data. FP07 time constant not identified: beads not distinguishable: |ln R'(20 Hz)| = 0.069 < max(3 x 0.021, 0.15); tau1 interval 12.5-20.9 ms spans x1.68 > x1.5; tau2 interval 11.7-19.8 ms spans x1.69 > x1.5. FP07 time constant: Speed from U_EM (proc/results/em); see T2811's entry.
 
 ### Prior for a fresh deployment of T2813
 
@@ -617,7 +617,7 @@ From **ARCTERX-2025 Interior** (MR1000RDL-EM SN 435 T2, 2025-02-04 to 2025-04-10
 
 | t_0 [K] | beta_1 [K] | beta_2 [K] | beta_3 [K] |
 |---|---|---|---|
-| 287.735112 | 3025.1544 | 254553.1 | 16278810.3 |
+| 287.735117 | 3025.1494 | 254534.9 | 17419377.8 |
 
 - **t_0**: ±15 mK in temperature, the carried-over offset (±18 mK on another instrument or channel, a term that rests on one observation).
 - **shape**: ±5 mK over a 5-10 K span.
