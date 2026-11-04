@@ -325,7 +325,7 @@ Controls time-binning of CTD channels per file.
 
 ### `speed` — Through-Water Speed Source
 
-Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`). If an explicitly selected non-pressure method fails (an unusable hotel channel; a missing or all-NaN `U_EM`; a flight model with zero finite samples — pitch never clearing `min_pitch_deg`; a non-finite `value`), the file is **aborted with a recorded error** — it never silently falls back to \|dP/dt\| (which has ~U⁴ leverage on ε) or publishes the `speed_cutout` floor as data.
+Controls how the through-water (profiling) speed is computed. Speed is computed after the [hotel merge](#hotel--hotel-file-external-telemetry): `method: "hotel"` consumes a hotel-merged channel (named by `hotel_var`), while the other methods read the instrument's own channels. The selected source is recorded on the products as `speed_source` (`"pressure"`, `"em"`, `"em[k=<em_scale>]"`, `"flight"`, `"constant:<v>"`, or `"hotel:<var>"`). If an explicitly selected non-pressure method fails (an unusable hotel channel; a missing or all-NaN `U_EM`; a flight model with zero finite samples — pitch never clearing `min_pitch_deg`; a non-finite `value`), the file is **aborted with a recorded error** — it never silently falls back to \|dP/dt\| (which has ~U⁴ leverage on ε) or publishes the `speed_cutout` floor as data.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -337,6 +337,32 @@ Controls how the through-water (profiling) speed is computed. Speed is computed 
 | `speed_cutout` | float | `0.05` | Floor [m/s] applied to the fast-rate speed |
 | `tau` | float | `null` | Smoothing time constant [s]; null = vehicle default (vmp/xmp 1.5, slocum_glider 3.0, ...) |
 | `amplitude_quantile` | list | `[1.0, 99.0]` | Flight method: percentile spread used to auto-pick the pitch axis from `Incl_X`/`Incl_Y`; 1..99 strips outliers (surface tumbles, sensor saturation spikes) |
+| `em_scale` | float | `1.0` | `em` method: speed = `em_scale` × \|U_EM\|. 1 uses U_EM as recorded. See [Scaling U_EM](#scaling-u_em-em_scale) |
+| `em_correction_note` | string | `null` | Where `em_scale` came from. Required when `em_scale` is not 1 |
+
+#### Scaling U_EM (`em_scale`)
+
+A MicroRider's AEM1-G flowmeter has been found to read high on gliders. The published factors that multiply U_EM are:
+
+- **0.93**: Merckelbach et al. (2019, [doi:10.1175/JTECH-D-18-0168.1](https://doi.org/10.1175/JTECH-D-18-0168.1)), from pressure and pitch with a modeled angle of attack.
+- **0.85**: Tanaka et al. (2022, [doi:10.1175/JTECH-D-21-0074.1](https://doi.org/10.1175/JTECH-D-21-0074.1)), measured against an ADCP on Slocum descents. The same paper gives 0.90 on a SeaExplorer, and 0.90 again on the Slocum descents when Merckelbach's recipe is used.
+
+Each factor was measured on another unit and another glider. A factor from pressure and pitch depends on the angle of attack assumed, and Tanaka et al. state that the scale and the flight coefficients "cannot be determined uniquely without having another source of velocity measurement". So `em_correction_note` is required: say where the number came from.
+
+```yaml
+speed:
+  method: "em"
+  em_scale: 0.93
+  em_correction_note: "Merckelbach et al. 2019 factor; a different unit and glider"
+```
+
+- **How it is applied.** The factor multiplies \|U_EM\| before the coverage and gap checks, interpolation, smoothing and the `speed_cutout` floor. Away from the floor the product speed is therefore exactly `em_scale` times the unscaled one, which moves epsilon by about `em_scale`⁻⁴ and chi by about `em_scale`⁻² (×1.52 and ×1.23 at 0.9). If the factor pushes more than 1% of the finite U_EM samples below `speed_cutout`, the file warns.
+- **Same result as patching the file.** For the `aem1g_d` converter (`U = a/100 + b/100·counts`, linear in both; the only EM type seen in our files) it gives the same speed as multiplying the U_EM channel's `a` and `b` by `em_scale` in the `.p` configuration (`rsi-tpw patch-config`). That shortcut does not hold for `aem1g_a` with a nonzero `bias` or for `alec_emc`; `em_scale` scales the converted speed whatever the type. The in-pipeline route is the one to use, because the factor stays visible in the config and on the products.
+- **perturb only.** `rsi-tpw` has no `em_scale`.
+- **The note is part of the signature.** With a factor other than 1, `em_correction_note` is hashed with it, so editing the note re-versions every stage downstream of speed. It is the factor's only durable record.
+- **Provenance.** `speed_source` reads `em[k=<em_scale>]`, plus `(cov=…,gap=…s)` when part of the record was interpolated. At 1 it is plain `em`, and the stage signature is the one from before the key existed, so existing products are not re-versioned.
+- **Errors.** `em_scale` other than 1 is an error with any `method` other than `em`, because there it would silently do nothing. It is also an error without `em_correction_note`, and when it is not a finite number > 0. A value outside [0.7, 1.3] warns.
+- **Not implemented yet.** A zero offset, the axial cos α projection and per-installation correction records are planned in `docs/uem_correction_PLAN.md` (branch `plan/uem-correction`). They wait on the AEM1-G tank analysis, which decides between gain and zero.
 
 ---
 

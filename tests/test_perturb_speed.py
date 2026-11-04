@@ -568,3 +568,192 @@ class TestFlightParameterValidation:
         np.testing.assert_allclose(
             np.median(speed[1000:-1000]), 0.5 / np.sin(np.deg2rad(30.0)), atol=0.02
         )
+
+
+class TestEMScale:
+    """speed.em_scale: speed = k * |U_EM| (Merckelbach et al. 2019 k = 0.93)."""
+
+    NOTE = "test factor"
+
+    def test_identity_is_bit_identical(self, glider_with_em):
+        pf = glider_with_em
+        pf.channels["U_EM"] = 0.32 + 0.05 * np.sin(np.arange(pf.channels["P"].size) / 50.0)
+        base, _, src0 = compute_speed_for_pfile(pf, {"method": "em"}, vehicle="slocum_glider")
+        for k in (1.0, 1, None):
+            s, _, src = compute_speed_for_pfile(
+                pf, {"method": "em", "em_scale": k}, vehicle="slocum_glider",
+            )
+            np.testing.assert_array_equal(s, base)
+            assert src == src0 == "em"
+
+    def test_scales_speed_exactly(self, glider_with_em):
+        """Interp and smoothing are linear, so off the floor the product is k x."""
+        pf = glider_with_em
+        pf.channels["U_EM"] = 0.32 + 0.05 * np.sin(np.arange(pf.channels["P"].size) / 50.0)
+        base, _, _ = compute_speed_for_pfile(pf, {"method": "em"}, vehicle="slocum_glider")
+        s, W, src = compute_speed_for_pfile(
+            pf,
+            {"method": "em", "em_scale": 0.9, "em_correction_note": self.NOTE},
+            vehicle="slocum_glider",
+        )
+        np.testing.assert_allclose(s, 0.9 * base, rtol=1e-12)
+        assert src == "em[k=0.9]"
+        # W_slow is |dP/dt| and does not move.
+        _, W0, _ = compute_speed_for_pfile(pf, {"method": "em"}, vehicle="slocum_glider")
+        np.testing.assert_array_equal(W, W0)
+
+    def test_scales_abs_of_negative_u_em(self, vmp_descent):
+        pf = vmp_descent
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], -0.4)
+        s, _, _ = compute_speed_for_pfile(
+            pf,
+            {"method": "em", "em_scale": 0.85, "em_correction_note": self.NOTE},
+            vehicle="slocum_glider",
+        )
+        np.testing.assert_allclose(np.median(s[1000:-1000]), 0.34, atol=1e-3)
+
+    def test_imputation_suffix_kept(self, glider_with_em):
+        pf = glider_with_em
+        pf.channels["U_EM"][100:200] = np.nan
+        _, _, src = compute_speed_for_pfile(
+            pf,
+            {"method": "em", "em_scale": 0.93, "em_correction_note": self.NOTE},
+            vehicle="slocum_glider",
+        )
+        assert src.startswith("em[k=0.93](cov=")
+
+    def test_warns_when_pushed_under_cutout(self, glider_with_em):
+        pf = glider_with_em
+        pf.channels["U_EM"] = np.full_like(pf.channels["P"], 0.052)
+        with pytest.warns(UserWarning, match=r"below speed_cutout"):
+            compute_speed_for_pfile(
+                pf,
+                {"method": "em", "em_scale": 0.9, "em_correction_note": self.NOTE},
+                vehicle="slocum_glider",
+            )
+
+    @pytest.mark.parametrize("bad", [0.0, -0.9, float("nan"), float("inf"), "0.9", True])
+    def test_invalid_value_raises(self, glider_with_em, bad):
+        with pytest.raises(ValueError, match=r"speed\.em_scale"):
+            compute_speed_for_pfile(
+                glider_with_em,
+                {"method": "em", "em_scale": bad, "em_correction_note": self.NOTE},
+                vehicle="slocum_glider",
+            )
+
+    @pytest.mark.parametrize("note", [None, "", "   "])
+    def test_note_required(self, glider_with_em, note):
+        with pytest.raises(ValueError, match=r"needs speed\.em_correction_note"):
+            compute_speed_for_pfile(
+                glider_with_em,
+                {"method": "em", "em_scale": 0.9, "em_correction_note": note},
+                vehicle="slocum_glider",
+            )
+
+    @pytest.mark.parametrize("method", ["pressure", "flight", "constant", "hotel"])
+    def test_non_em_method_is_an_error(self, glider_with_incl, method):
+        """Decided 2026-09-15 (docs/uem_correction_PLAN.md §6): a factor that
+        would silently do nothing is an error. The text is asserted on purpose."""
+        expected = (
+            f"speed.em_scale is set but speed.method is {method!r}. The U_EM "
+            "correction is applied only when speed comes from U_EM (method 'em'); "
+            f"with method {method!r} it would be silently ignored and the products "
+            "would not be corrected. Remove that key, or set speed.method: em."
+        )
+        with pytest.raises(ValueError) as exc:
+            compute_speed_for_pfile(
+                glider_with_incl,
+                {"method": method, "value": 0.3, "em_scale": 0.9,
+                 "em_correction_note": self.NOTE},
+                vehicle="slocum_glider",
+            )
+        assert str(exc.value) == expected
+
+    def test_identity_under_other_method_is_fine(self, glider_with_incl):
+        compute_speed_for_pfile(
+            glider_with_incl, {"method": "flight", "em_scale": 1.0}, vehicle="slocum_glider",
+        )
+
+
+class TestEMScaleConfig:
+    """perturb config: load-time validation and the stage signature."""
+
+    def _write(self, tmp_path, speed_yaml):
+        p = tmp_path / "c.yaml"
+        p.write_text("speed:\n" + speed_yaml)
+        return p
+
+    def test_default_and_template(self, tmp_path):
+        from odas_tpw.perturb import config as cfg
+
+        assert cfg.DEFAULTS["speed"]["em_scale"] == 1.0
+        assert cfg.DEFAULTS["speed"]["em_correction_note"] is None
+        template = cfg.generate_template(tmp_path / "t.yaml").read_text()
+        assert "em_scale: 1.0" in template
+        assert "em_correction_note: null" in template
+
+    def test_identity_leaves_the_signature_unchanged(self):
+        from odas_tpw.perturb import config as cfg
+
+        for spec in ({}, {"method": "em"}, {"method": "flight", "aoa_deg": 4.0}):
+            view = cfg.canonicalize("speed", spec)
+            assert "em_scale" not in view and "em_correction_note" not in view
+            h = cfg.compute_hash("speed", spec)
+            assert cfg.compute_hash("speed", {**spec, "em_scale": 1.0}) == h
+            assert cfg.compute_hash("speed", {**spec, "em_scale": None}) == h
+            # A note without a factor is inert too: it documents a correction
+            # that is not applied, so it must not re-version anything.
+            assert cfg.compute_hash("speed", {**spec, "em_correction_note": "x"}) == h
+            assert (
+                cfg.compute_hash("speed", {**spec, "em_scale": 1, "em_correction_note": "x"}) == h
+            )
+        em = {"method": "em"}
+        scaled = {"method": "em", "em_scale": 0.9, "em_correction_note": "x"}
+        assert cfg.compute_hash("speed", scaled) != cfg.compute_hash("speed", em)
+        assert cfg.compute_hash("speed", scaled) != cfg.compute_hash(
+            "speed", {**scaled, "em_scale": 0.93}
+        )
+
+    def test_process_file_refuses_a_factor_pressure_would_ignore(self, tmp_path):
+        # process_file can be handed a config that never went through
+        # load_config (Python callers). Its speed stage turns a failure under
+        # the default method "pressure" into a warning and |dP/dt|, so the
+        # check must run before it, and raise.
+        from odas_tpw.perturb.pipeline import process_file
+
+        config = {"speed": {"em_scale": 0.9, "em_correction_note": "x"}}
+        with pytest.raises(ValueError, match=r"speed\.method is 'pressure'"):
+            process_file(tmp_path / "never_read.p", config, None, {})
+
+    def test_loads_a_valid_factor(self, tmp_path):
+        from odas_tpw.perturb import config as cfg
+
+        p = self._write(
+            tmp_path, '  method: "em"\n  em_scale: 0.9\n  em_correction_note: "Merckelbach"\n'
+        )
+        assert cfg.load_config(p)["speed"]["em_scale"] == 0.9
+
+    @pytest.mark.parametrize(
+        ("body", "match"),
+        [
+            ('  method: "flight"\n  em_scale: 0.9\n  em_correction_note: "x"\n',
+             r"speed\.method is 'flight'"),
+            ("  em_scale: 0.9\n  em_correction_note: \"x\"\n", r"speed\.method is 'pressure'"),
+            ('  method: "em"\n  em_scale: 0.9\n', r"needs speed\.em_correction_note"),
+            ('  method: "em"\n  em_scale: -1\n  em_correction_note: "x"\n', r"> 0"),
+            ('  method: "em"\n  em_scale: "0.9"\n  em_correction_note: "x"\n',
+             r"expected a number"),
+        ],
+    )
+    def test_fails_at_load(self, tmp_path, body, match):
+        from odas_tpw.perturb import config as cfg
+
+        with pytest.raises(ValueError, match=match):
+            cfg.load_config(self._write(tmp_path, body))
+
+    def test_out_of_range_warns_at_load(self, tmp_path):
+        from odas_tpw.perturb import config as cfg
+
+        p = self._write(tmp_path, '  method: "em"\n  em_scale: 0.6\n  em_correction_note: "x"\n')
+        with pytest.warns(UserWarning, match=r"outside \[0\.7, 1\.3\]"):
+            cfg.load_config(p)

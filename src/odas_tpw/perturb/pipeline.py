@@ -3337,6 +3337,15 @@ def process_file(
     # loudly here rather than silently (bool -> 1 PSU) or once per profile.
     _normalize_config_salinity(config)
     _validate_stratification_options(config)
+    # speed.em_scale: an invalid value, or a factor the chosen method would
+    # ignore, is refused HERE, outside the speed stage's try below. There a
+    # failure under the default method "pressure" only warns and falls back to
+    # |dP/dt|, which is the silent no-op this guard exists to prevent.
+    # load_config checks it too, but process_file can be handed a config that
+    # never went through load_config.
+    from odas_tpw.rsi.speed import em_scale_from_cfg
+
+    em_scale_from_cfg(merge_config("speed", config.get("speed")))
 
     try:
         pf = PFile(p_path)
