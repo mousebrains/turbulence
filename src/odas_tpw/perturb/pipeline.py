@@ -3441,8 +3441,12 @@ def process_file(
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
+            from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
             method_cfg = str(speed_cfg.get("method", "pressure"))
-            if method_cfg != "pressure":
+            # A glider under the pressure method is refused, not degraded: the
+            # fallback below would publish the very |dP/dt| it refuses.
+            if method_cfg != "pressure" or isinstance(exc, PressureSpeedOnGliderError):
                 # An explicitly selected non-pressure speed source (em /
                 # flight / constant / hotel — "pressure" is the DEFAULT, so a
                 # non-pressure method here is always user-configured) failed:

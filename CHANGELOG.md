@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **`speed.method: pressure` on a glider is an error (perturb).** On a
+  `slocum_glider`, `sea_glider` or `sea_explorer` file, \|dP/dt\| is the
+  vertical rate, not the flow past the sensors, and it used to be accepted with
+  a warning that only the worker logs showed. The RIOT 2026 shakedown
+  MicroRiders were processed that way: against 0.93 x U_EM, the median epsilon
+  came out ~6x high (3-14x per window, 5-95%) and chi ~3x.
+  `compute_speed_for_pfile` now raises `PressureSpeedOnGliderError` (a
+  `ValueError`), and `process_file` aborts the file with it even under the
+  default method, whose other speed failures still only warn and fall back. The
+  message points to `em` (and `em_scale`) when the file has `U_EM`, else to
+  `flight`. Because `pressure` is the default, a glider config with no `speed:`
+  block is refused too. The vehicle decides, not `profiles.direction`. Other
+  horizontal platforms still warn.
+
 ### Added
 - **`speed.em_scale`: a gain factor on the EM flowmeter speed (perturb,
   `speed.method: em`).** Speed = `em_scale * |U_EM|`, applied before the

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -94,14 +97,62 @@ class TestPressureMethod:
         )
         np.testing.assert_allclose(speed_fast, 0.07, atol=1e-12)
 
-    def test_glider_pressure_method_warns(self, vmp_descent):
-        """Audit r2-3: the pressure method on a glide vehicle warns that
-        |dP/dt| is the vertical (not through-water) speed and epsilon is
-        biased — matching the rsi path, which perturb otherwise bypasses."""
-        with pytest.warns(UserWarning, match="strongly biased"):
+    @pytest.mark.parametrize("vehicle", ["slocum_glider", "sea_glider", "sea_explorer"])
+    def test_glider_pressure_method_is_refused(self, vmp_descent, vehicle):
+        """|dP/dt| is a glider's VERTICAL rate: the pressure method is an error
+        there, not a warning (Pat, 2026-11-04). Without U_EM the message points
+        to the flight model, and only to it."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        with pytest.raises(PressureSpeedOnGliderError) as err:
+            compute_speed_for_pfile(vmp_descent, {"method": "pressure"}, vehicle=vehicle)
+        msg = str(err.value)
+        assert vehicle in msg and "speed.method: flight" in msg
+        assert "speed.method: em" not in msg
+
+    def test_glider_default_method_is_refused(self, vmp_descent):
+        """The DEFAULT method is pressure, so a glider config with no speed
+        block is refused too: the RIOT 2026 shakedown case."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        with pytest.raises(PressureSpeedOnGliderError):
+            compute_speed_for_pfile(vmp_descent, {}, vehicle="slocum_glider")
+
+    def test_glider_with_em_is_pointed_at_em(self, glider_with_em):
+        """With a U_EM channel the message names method em and em_scale, and
+        flight as the alternative."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        with pytest.raises(PressureSpeedOnGliderError) as err:
             compute_speed_for_pfile(
-                vmp_descent, {"method": "pressure"}, vehicle="slocum_glider",
+                glider_with_em, {"method": "pressure"}, vehicle="slocum_glider",
             )
+        msg = str(err.value)
+        assert "speed.method: em" in msg and "speed.em_scale" in msg
+        assert "speed.method: flight" in msg
+
+    def test_glider_refusal_is_a_value_error(self):
+        """Callers that catch ValueError for a bad speed configuration still do."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        assert issubclass(PressureSpeedOnGliderError, ValueError)
+
+    @pytest.mark.parametrize("vehicle", ["auv", "stand"])
+    def test_horizontal_pressure_method_still_warns(self, vmp_descent, vehicle):
+        """Only gliders are refused; another horizontal platform keeps the
+        audit r2-3 warning, and still gets |dP/dt|."""
+        with pytest.warns(UserWarning, match="strongly biased"):
+            speed_fast, _, source = compute_speed_for_pfile(
+                vmp_descent, {"method": "pressure"}, vehicle=vehicle,
+            )
+        assert source == "pressure" and np.isfinite(speed_fast).all()
+
+    def test_glider_explicit_methods_unaffected(self, glider_with_em):
+        """em on a glider is not touched by the refusal."""
+        _, _, source = compute_speed_for_pfile(
+            glider_with_em, {"method": "em"}, vehicle="slocum_glider",
+        )
+        assert source == "em"
 
     def test_vmp_pressure_method_does_not_warn(self, vmp_descent):
         """A VMP's vertical speed IS its through-water speed — no warning."""
@@ -757,3 +808,34 @@ class TestEMScaleConfig:
         p = self._write(tmp_path, '  method: "em"\n  em_scale: 0.6\n  em_correction_note: "x"\n')
         with pytest.warns(UserWarning, match=r"outside \[0\.7, 1\.3\]"):
             cfg.load_config(p)
+
+
+class TestGliderPressureRefusedInPerturb:
+    """process_file aborts a glider file under the pressure method instead of
+    falling back to |dP/dt| (the fallback that hid the RIOT 2026 defect)."""
+
+    FIXTURE = Path(__file__).parent / "data" / "MR_SL435.p"
+
+    def _run(self, tmp_path, speed):
+        from odas_tpw.perturb.pipeline import process_file
+
+        if not self.FIXTURE.exists():
+            pytest.skip("MR_SL435.p test data not available")
+        cfg = {"speed": speed} if speed is not None else {}
+        dirs = {k: tmp_path / k for k in ("profiles", "diss", "chi")}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return process_file(self.FIXTURE, cfg, None, dirs), dirs
+
+    @pytest.mark.parametrize("speed", [None, {"method": "pressure"}])
+    def test_aborted_with_the_reason(self, tmp_path, speed):
+        result, dirs = self._run(tmp_path, speed)
+        errors = result.get("errors") or []
+        assert len(errors) == 1 and errors[0].startswith("speed: speed.method is 'pressure'")
+        assert "slocum_glider" in errors[0] and "speed.method: em" in errors[0]
+        assert result["profiles"] == []
+        assert not any(dirs["profiles"].glob("*.nc"))
+
+    def test_em_is_not_aborted(self, tmp_path):
+        result, _ = self._run(tmp_path, {"method": "em"})
+        assert not any(str(e).startswith("speed:") for e in result.get("errors") or [])

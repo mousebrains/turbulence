@@ -10,8 +10,11 @@ Methods
 -------
 ``"pressure"``
     ODAS-style smoothed ``|dP/dt|`` at slow rate, interpolated and
-    Butterworth-smoothed onto fast rate. This is the historical default
-    (correct for VMP, returns vertical speed for a glider).
+    Butterworth-smoothed onto fast rate. This is the historical default,
+    correct for a VMP. On a GLIDER it is refused
+    (:class:`PressureSpeedOnGliderError`): ``|dP/dt|`` is the vertical rate
+    there, not the flow past the sensors. On another horizontal platform it
+    only warns.
 
 ``"em"``
     Use the ``U_EM`` channel from the ``.p`` file — the MicroRider's
@@ -68,6 +71,38 @@ EM_SCALE_WARN_RANGE: tuple[float, float] = (0.7, 1.3)
 # Warn when the factor pushes more than this fraction of the finite U_EM
 # samples from at or above speed_cutout to below it.
 _EM_SCALE_CUTOUT_WARN_FRACTION = 0.01
+
+
+class PressureSpeedOnGliderError(ValueError):
+    """``speed.method: pressure`` on a glider.
+
+    ``|dP/dt|`` is a glider's VERTICAL rate, a fraction of the flow past the
+    sensors, so epsilon (~U^-4) and chi (~U^-2) would come out biased high.
+    Raised rather than warned (Pat Welch, 2026-11-04): the RIOT 2026
+    shakedown products were built on it with only a worker-log warning.
+    perturb's ``process_file`` aborts the file on it even under the default
+    method, whose other failures it only warns about.
+    """
+
+
+def pressure_speed_on_glider_message(vehicle: str, has_u_em: bool) -> str:
+    """The refusal text, naming the method this file can use instead."""
+    head = (
+        f"speed.method is 'pressure', but this is a glider (vehicle {vehicle!r}): "
+        "|dP/dt| is the vertical rate, not the flow past the sensors, so epsilon "
+        "(~U^-4) and chi (~U^-2) would be biased high. "
+    )
+    if has_u_em:
+        return head + (
+            "This file has a U_EM channel: set speed.method: em, with "
+            "speed.em_scale and speed.em_correction_note to apply a published "
+            "U_EM factor (e.g. 0.93, Merckelbach et al. 2019), or speed.method: "
+            "flight if the flowmeter is unreliable."
+        )
+    return head + (
+        "This file has no U_EM channel, so the flight model is the option: set "
+        "speed.method: flight (U = |W| / sin(|pitch| + aoa_deg))."
+    )
 
 
 def em_scale_from_cfg(cfg: dict | None, *, warn: bool = False) -> float:
@@ -144,9 +179,9 @@ def compute_speed_for_pfile(
         Merged ``speed:`` section from the perturb config.
     vehicle : str | None
         Vehicle string from instrument_info (``"slocum_glider"``,
-        ``"vmp"`` etc.). Auto-resolves ``tau`` and, for the ``pressure``
-        method, triggers a bias warning on glide/horizontal platforms
-        (where ``|dP/dt|`` is not the through-water speed).
+        ``"vmp"`` etc.). Auto-resolves ``tau``. For the ``pressure`` method
+        it decides whether ``|dP/dt|`` is the through-water speed: a glider
+        is refused and another horizontal platform warns.
 
     Returns
     -------
@@ -169,6 +204,16 @@ def compute_speed_for_pfile(
                  ``"(cov=<f>,gap=<s>s)"``. Callers stamp
                  product provenance from this return value rather than
                  re-deriving it from the cfg.
+
+    Raises
+    ------
+    PressureSpeedOnGliderError
+        ``method`` is ``"pressure"`` and *vehicle* is a glider
+        (``slocum_glider``, ``sea_glider``, ``sea_explorer``). The message
+        names ``em`` when the file has a ``U_EM`` channel, else ``flight``.
+    ValueError
+        An invalid ``speed.em_scale``, or a non-pressure method that cannot
+        produce a speed (missing or all-NaN channel, ...).
     """
     from odas_tpw.rsi.vehicle import resolve_direction, resolve_tau
     from odas_tpw.scor160.profile import compute_speed_fast as _ode_speed
@@ -194,16 +239,22 @@ def compute_speed_for_pfile(
     if method == "pressure":
         # For a glider / horizontal platform, |dP/dt| is the VERTICAL speed and
         # underestimates the along-path flow past the sensors; epsilon has ~U^4
-        # leverage, so this strongly biases epsilon high. The rsi path warns
-        # about this in helpers.prepare_profiles, but perturb precomputes speed
-        # here and so never reaches that warning — emit the equivalent here so
-        # the perturb path is not silent (audit r2-3). VMP (down/up) is unaffected.
+        # leverage, so this strongly biases epsilon high. On a glider that is an
+        # ERROR (Pat Welch, 2026-11-04): it used to be only a warning, which the
+        # perturb worker logs hid. The vehicle string decides, not
+        # profiles.direction: a glider MicroRider that records only its climbs
+        # sets direction "up" and is still a glider. Another horizontal
+        # platform still only warns (audit r2-3). VMP (down/up) is unaffected.
         direction = resolve_direction("auto", vehicle or "")
-        if direction in ("glide", "horizontal"):
+        if direction == "glide":
+            raise PressureSpeedOnGliderError(
+                pressure_speed_on_glider_message(vehicle or "", "U_EM" in pf.channels)
+            )
+        if direction == "horizontal":
             warnings.warn(
                 f"Vehicle direction '{direction}' but speed.method='pressure' "
                 "computes speed from |dP/dt| (vertical); set speed.method="
-                "'flight' (glider) or 'em' (horizontal), or speed.value — "
+                "'em' (U_EM), 'hotel', or 'constant' with speed.value — "
                 "epsilon scales as ~U^4 and will be strongly biased",
                 stacklevel=2,
             )
