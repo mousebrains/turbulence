@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`speed.em_scale`: a gain factor on the EM flowmeter speed (perturb,
+  `speed.method: em`).** Speed = `em_scale * |U_EM|`, applied before the
+  coverage and gap checks, interpolation, smoothing and the `speed_cutout`
+  floor, so a glider's EM over-read can be corrected in the config instead of
+  by patching every `.p` file's U_EM calibration. A factor other than 1 needs a
+  non-blank `speed.em_correction_note` (hashed with it), and it is an error with
+  any other method, at load and again per file (`process_file` takes configs
+  that never went through `load_config`). Non-numbers, booleans, non-finite and
+  <= 0 values are errors; outside [0.7, 1.3] warns; a file warns when the
+  factor pushes more than 1% of its finite samples below `speed_cutout`.
+  Products record `speed_source` `em[k=<em_scale>]`. At 1 (the default) both
+  keys drop out of the stage signature: 424 signatures from 106 real configs
+  are unchanged. On 6 glider files `em_scale: 0.9` gives the same products as
+  `rsi-tpw patch-config` with U_EM `a` and `b` x 0.9 (`aem1g_d` is linear in
+  both). Published factors: Merckelbach et al. 2019, 0.93; Tanaka et al. 2022,
+  0.85 against an ADCP and 0.90 by Merckelbach's method.
 - **A bead's slow response path, divided out of its chi
   (`instruments.<key>.fp07_slow_response`, rsi-tpw `[chi] fp07_slow_response`;
   issue #252).** FP07 bead T2005 (VMP SN194 T2, 2021-06-29 to 2022-06-20) loses

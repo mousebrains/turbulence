@@ -14,9 +14,12 @@ Methods
     (correct for VMP, returns vertical speed for a glider).
 
 ``"em"``
-    Use the ``U_EM`` channel from the ``.p`` file directly — the
-    MicroRider's electromagnetic flowmeter measurement of along-axis
-    flow. Errors out if ``U_EM`` is missing.
+    Use the ``U_EM`` channel from the ``.p`` file — the MicroRider's
+    electromagnetic flowmeter measurement of along-axis flow, times
+    ``speed.em_scale`` (default 1: as recorded). Errors out if ``U_EM`` is
+    missing. A published U_EM over-read is a factor below 1 (Merckelbach
+    et al. 2019: 0.93; Tanaka et al. 2022: 0.85-0.90); see
+    :func:`em_scale_from_cfg`.
 
 ``"flight"``
     Construct an inviscid flight-model along-axis speed from the MR's
@@ -54,6 +57,76 @@ from typing import Any
 
 import numpy as np
 
+# Methods whose speed comes from U_EM, and so the only ones speed.em_scale can
+# apply to. A factor under any other method would silently do nothing.
+EM_SCALE_METHODS: tuple[str, ...] = ("em",)
+
+# speed.em_scale outside this range is accepted with a warning. The published
+# U_EM factors (0.85-0.93) sit well inside it.
+EM_SCALE_WARN_RANGE: tuple[float, float] = (0.7, 1.3)
+
+# Warn when the factor pushes more than this fraction of the finite U_EM
+# samples from at or above speed_cutout to below it.
+_EM_SCALE_CUTOUT_WARN_FRACTION = 0.01
+
+
+def em_scale_from_cfg(cfg: dict | None, *, warn: bool = False) -> float:
+    """Validate the ``speed:`` section's U_EM factor and return it.
+
+    ``speed.em_scale`` (k) multiplies the U_EM record: speed = k * |U_EM|.
+    k = 1 (the default; ``null`` is the same) uses U_EM as recorded. A factor
+    other than 1:
+
+    - must be a finite number > 0;
+    - needs ``speed.method`` to take its speed from U_EM (``"em"``), because
+      under any other method it would silently do nothing and the products
+      would not be corrected;
+    - needs ``speed.em_correction_note`` saying where the factor came from,
+      because a published factor belongs to another unit on another glider.
+
+    With ``warn=True`` (once, at config load) a factor outside
+    ``EM_SCALE_WARN_RANGE`` also warns.
+    """
+    cfg = cfg or {}
+    raw = cfg.get("em_scale")
+    if raw is None:
+        return 1.0
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"speed.em_scale: expected a number, got {raw!r}")
+    k = float(raw)
+    if not np.isfinite(k) or k <= 0:
+        raise ValueError(
+            f"speed.em_scale={raw!r} is not valid: it multiplies U_EM and must be "
+            "a finite number > 0 (1 = U_EM as recorded)"
+        )
+    if k == 1.0:
+        return k
+    method = cfg.get("method", "pressure")
+    if method not in EM_SCALE_METHODS:
+        raise ValueError(
+            f"speed.em_scale is set but speed.method is {method!r}. The U_EM "
+            "correction is applied only when speed comes from U_EM (method 'em'); "
+            f"with method {method!r} it would be silently ignored and the products "
+            "would not be corrected. Remove that key, or set speed.method: em."
+        )
+    note = cfg.get("em_correction_note")
+    if not isinstance(note, str) or not note.strip():
+        raise ValueError(
+            f"speed.em_scale={k:g} needs speed.em_correction_note: say where the "
+            "factor comes from (e.g. 'Merckelbach et al. 2019, k=0.93, a different "
+            "unit and glider'). A published factor was measured on another "
+            "installation."
+        )
+    lo, hi = EM_SCALE_WARN_RANGE
+    if warn and not lo <= k <= hi:
+        warnings.warn(
+            f"speed.em_scale={k:g} is outside [{lo:g}, {hi:g}]; the published "
+            "U_EM factors are 0.85-0.93. epsilon scales as ~k^-4 and chi as ~k^-2",
+            UserWarning,
+            stacklevel=2,
+        )
+    return k
+
 
 def compute_speed_for_pfile(
     pf: Any,
@@ -89,8 +162,11 @@ def compute_speed_for_pfile(
     W_slow     : (n_slow,) float64, dbar/s. Always the smoothed |dP/dt|
                  -- independent of method, useful for QC/binning.
     source     : str, the provenance vocabulary for the speed actually
-                 computed: ``"pressure"`` | ``"em"`` | ``"flight"`` |
-                 ``"constant:<v>"`` | ``"hotel:<var>"``. Callers stamp
+                 computed: ``"pressure"`` | ``"em"`` | ``"em[k=<k>]"``
+                 (``speed.em_scale`` other than 1) | ``"flight"`` |
+                 ``"constant:<v>"`` | ``"hotel:<var>"``; a measured method
+                 that was partly interpolated appends
+                 ``"(cov=<f>,gap=<s>s)"``. Callers stamp
                  product provenance from this return value rather than
                  re-deriving it from the cfg.
     """
@@ -100,6 +176,9 @@ def compute_speed_for_pfile(
 
     cfg = speed_cfg or {}
     method = cfg.get("method", "pressure")
+    # Before the method dispatch: a factor under a method that does not use
+    # U_EM is an error, not a no-op.
+    em_scale = em_scale_from_cfg(cfg)
     speed_cutout = float(cfg.get("speed_cutout", 0.05))
     tau = float(cfg.get("tau") or resolve_tau(vehicle or ""))
 
@@ -172,6 +251,24 @@ def compute_speed_for_pfile(
                 f"the {speed_cutout:g} m/s speed_cutout floor as "
                 "through-water speed."
             )
+        label = "em"
+        if em_scale != 1.0:
+            # k > 0, so k*|U_EM| = |k*U_EM|. Applied before interpolation and
+            # smoothing (both linear), so the product speed is k times the
+            # unscaled one wherever neither sits on the speed_cutout floor.
+            finite = np.isfinite(U_em_slow)
+            pushed = finite & (U_em_slow >= speed_cutout) & (em_scale * U_em_slow < speed_cutout)
+            pushed_frac = float(pushed.sum()) / float(finite.sum())
+            if pushed_frac > _EM_SCALE_CUTOUT_WARN_FRACTION:
+                warnings.warn(
+                    f"speed.em_scale={em_scale:g} puts {100 * pushed_frac:.1f}% of the "
+                    f"finite U_EM samples below speed_cutout ({speed_cutout:g} m/s), "
+                    "where the floor replaces them",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            U_em_slow = em_scale * U_em_slow
+            label = f"em[k={em_scale:.11g}]"  # as many figures as the hash (config_base: .10e)
         frac, gap = _coverage(U_em_slow, t_slow)
         max_gap = float(cfg.get("max_gap_s", _SPEED_MAX_GAP_S))
         if frac < _EM_MIN_FINITE_FRACTION or gap > max_gap:
@@ -189,8 +286,9 @@ def compute_speed_for_pfile(
         # Provenance carries the imputation ONLY when there is some: a complete
         # record still reads exactly "em", so the common case and every
         # `speed_source == "em"` consumer are untouched, while a record that was
-        # partly interpolated says so durably in the product attrs.
-        return speed_fast, W_slow, _measured_provenance("em", frac, gap, fs_slow)
+        # partly interpolated says so durably in the product attrs. A factor
+        # other than 1 is named the same way: "em[k=0.93]".
+        return speed_fast, W_slow, _measured_provenance(label, frac, gap, fs_slow)
 
     if method == "flight":
         aoa_deg = float(cfg.get("aoa_deg", 3.0))

@@ -339,6 +339,8 @@ DEFAULTS: dict[str, dict] = {
         "speed_cutout": 0.05,  # m/s floor applied to fast-rate speed
         "tau": None,  # smoothing time constant; null = vehicle default
         "amplitude_quantile": [1.0, 99.0],  # for flight pitch-axis auto-pick
+        "em_scale": 1.0,  # multiplies U_EM, only for method="em" (1 = as recorded)
+        "em_correction_note": None,  # where em_scale came from; required when != 1
     },
     # Per-segment QC gate. Each "_drop_from" entry names a hotel-injected
     # channel (uint8 bitfield or boolean) sampled by time over the segment's
@@ -633,6 +635,13 @@ class _PerturbConfigManager(ConfigManager):
                 for k in ("bbl_diss_length", "bbl_overlap", "bbl_extent"):
                     if mapping.get(k) is None:
                         mapping.pop(k, None)
+        # speed: em_scale = 1 is U_EM as recorded, the code from before the key
+        # existed, so it and its note are left out and every existing config
+        # keeps its stage signature. Any other factor changes it.
+        em_scale = mapping.get("em_scale")
+        if section == "speed" and em_scale in (None, 1) and not isinstance(em_scale, bool):
+            mapping.pop("em_scale", None)
+            mapping.pop("em_correction_note", None)
         if section == "epsilon":
             # At the values that reproduce the code from before each key
             # existed (0.04 was hard-wired), the key is left out.
@@ -730,6 +739,13 @@ class _PerturbConfigManager(ConfigManager):
         from odas_tpw.rsi.dissipation import validate_epsilon_options
 
         validate_epsilon_options(config.get("epsilon") or {})
+        # speed.em_scale: at load time, so a factor under a method that does not
+        # use U_EM (or one without its note) fails before any file is processed.
+        speed = config.get("speed") or {}
+        if isinstance(speed, dict):
+            from odas_tpw.rsi.speed import em_scale_from_cfg
+
+            em_scale_from_cfg({**DEFAULTS["speed"], **speed}, warn=True)
         chi = config.get("chi") or {}
         first_bin = chi.get("first_bin")
         if first_bin is not None:
@@ -1720,6 +1736,13 @@ speed:
                                    # Incl_X/Incl_Y. 1..99 strips outliers
                                    # (surface tumbles, sensor saturation
                                    # spikes) that can dominate min/max.
+  em_scale: 1.0           # method="em": speed = em_scale * |U_EM|. 1 = U_EM
+                          # as recorded. Published U_EM over-reads give
+                          # factors below 1 (Merckelbach et al. 2019: 0.93;
+                          # Tanaka et al. 2022: 0.85-0.90), measured on other
+                          # units. epsilon moves ~em_scale^-4, chi ~^-2.
+                          # Any other method with em_scale != 1 is an error.
+  em_correction_note: null  # required when em_scale != 1: where it came from
 
 qc:
   enable: true
