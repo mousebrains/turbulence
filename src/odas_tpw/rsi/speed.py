@@ -11,10 +11,11 @@ Methods
 ``"pressure"``
     ODAS-style smoothed ``|dP/dt|`` at slow rate, interpolated and
     Butterworth-smoothed onto fast rate. This is the historical default,
-    correct for a VMP. On a GLIDER it is refused
-    (:class:`PressureSpeedOnGliderError`): ``|dP/dt|`` is the vertical rate
-    there, not the flow past the sensors. On another horizontal platform it
-    only warns.
+    correct for a VMP. On a GLIDER perturb refuses it
+    (:class:`PressureSpeedOnGliderError`, see :func:`glider_basis`):
+    ``|dP/dt|`` is the vertical rate there, not the flow past the sensors.
+    On another horizontal platform it only warns. ``rsi-tpw`` does not take
+    this path for ``pressure`` and still only warns.
 
 ``"em"``
     Use the ``U_EM`` channel from the ``.p`` file — the MicroRider's
@@ -55,10 +56,13 @@ Methods
 
 from __future__ import annotations
 
+import re
 import warnings
 from typing import Any
 
 import numpy as np
+
+from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES
 
 # Methods whose speed comes from U_EM, and so the only ones speed.em_scale can
 # apply to. A factor under any other method would silently do nothing.
@@ -85,24 +89,73 @@ class PressureSpeedOnGliderError(ValueError):
     """
 
 
-def pressure_speed_on_glider_message(vehicle: str, has_u_em: bool) -> str:
-    """The refusal text. The remedy comes first: the run summary clips each
-    line at 200 characters, and the file name and prefix take ~30 of them."""
-    head = f"speed.method 'pressure' is refused on a glider (vehicle {vehicle!r}): "
+GLIDER_VEHICLES: frozenset[str] = frozenset(
+    name for name, (direction, _tau) in VEHICLE_ATTRIBUTES.items() if direction == "glide"
+)
+"""The ODAS ``default_vehicle_attributes.ini`` vehicles whose direction is ``glide``
+(``slocum_glider``, ``sea_glider``, ``sea_explorer``)."""
+
+_MICRORIDER_MODEL = re.compile(r"^\s*(mr\d|microrider)", re.IGNORECASE)
+
+
+def glider_basis(
+    vehicle: str | None,
+    model: str | None = None,
+    direction: str | None = None,
+) -> str | None:
+    """Why a file counts as a glider for the pressure-speed refusal, or None.
+
+    Any one suffices, checked in this order:
+
+    - the ``.p`` file's ``vehicle`` is a glider (:data:`GLIDER_VEHICLES`);
+    - the configured ``profiles.direction`` is ``"glide"``: the recipes for
+      glider files whose ``instrument_info`` is empty (Taiwan 2013 husker
+      MR046, Tanaka unit211 SN058) set it for exactly that reason;
+    - the file has no ``vehicle`` and its ``model`` is a MicroRider
+      (``MR1000EM``, ``MR1000RDL-EM``, ...), which is glider-mounted.
+
+    Undetectable: a file with an empty ``instrument_info`` and
+    ``direction: up`` (a climb-only glider recipe). Returns a short phrase for
+    the message, e.g. ``"vehicle 'slocum_glider'"``.
+    """
+    v = (vehicle or "").strip().lower()
+    if v in GLIDER_VEHICLES:
+        return f"vehicle {v!r}"
+    if (direction or "").strip().lower() == "glide":
+        return "profiles.direction 'glide'"
+    m = (model or "").strip()
+    if not v and _MICRORIDER_MODEL.match(m):
+        return f"model {m!r}"
+    return None
+
+
+def _instrument_model(pf: Any) -> str:
+    """``instrument_info.model`` from a loaded file's configuration, else ``""``."""
+    cfg = getattr(pf, "config", None)
+    info = cfg.get("instrument_info") if isinstance(cfg, dict) else None
+    return str(info.get("model") or "") if isinstance(info, dict) else ""
+
+
+def pressure_speed_on_glider_message(basis: str, has_u_em: bool) -> str:
+    """The refusal text, for a file :func:`glider_basis` called a glider.
+
+    Both remedies come first: the run summary clips each line at 200
+    characters, and the file name and prefix take ~30 of them.
+    """
+    head = f"speed.method 'pressure' refused on a glider ({basis}): "
     why = (
         " |dP/dt| is the vertical rate, not the flow past the sensors, so epsilon "
         "(~U^-4) and chi (~U^-2) would be biased high."
     )
     if has_u_em:
         return head + (
-            "set speed.method: em (this file has U_EM; speed.em_scale and "
-            "speed.em_correction_note apply a published factor, e.g. 0.93 from "
-            "Merckelbach et al. 2019), or speed.method: flight if the flowmeter "
-            "is unreliable." + why
+            "set speed.method: em (file has U_EM) or flight (if U_EM is "
+            "unreliable)." + why + " speed.em_scale and speed.em_correction_note "
+            "apply a published U_EM factor (e.g. 0.93, Merckelbach et al. 2019)."
         )
     return head + (
-        "set speed.method: flight (U = |W| / sin(|pitch| + aoa_deg); this file has "
-        "no U_EM), or speed.method: hotel with an external flight-model speed." + why
+        "set speed.method: flight (no U_EM here) or hotel (a flight-model "
+        "speed)." + why
     )
 
 
@@ -168,6 +221,8 @@ def compute_speed_for_pfile(
     pf: Any,
     speed_cfg: dict | None,
     vehicle: str | None = None,
+    *,
+    direction: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, str]:
     """Return (speed_fast, W_slow, source) from the configured method.
 
@@ -183,6 +238,10 @@ def compute_speed_for_pfile(
         ``"vmp"`` etc.). Auto-resolves ``tau``. For the ``pressure`` method
         it decides whether ``|dP/dt|`` is the through-water speed: a glider
         is refused and another horizontal platform warns.
+    direction : str | None
+        The configured ``profiles.direction``. ``"glide"`` marks the file a
+        glider for the ``pressure`` refusal even when its ``vehicle`` is
+        empty (see :func:`glider_basis`); nothing else reads it.
 
     Returns
     -------
@@ -209,9 +268,11 @@ def compute_speed_for_pfile(
     Raises
     ------
     PressureSpeedOnGliderError
-        ``method`` is ``"pressure"`` and *vehicle* is a glider
-        (``slocum_glider``, ``sea_glider``, ``sea_explorer``). The message
-        names ``em`` when the file has a ``U_EM`` channel, else ``flight``.
+        ``method`` is ``"pressure"`` and :func:`glider_basis` calls the file
+        a glider: its *vehicle* is ``slocum_glider``, ``sea_glider`` or
+        ``sea_explorer``; *direction* is ``"glide"``; or it has no vehicle and
+        a MicroRider model. The message names ``em`` when the file has a
+        ``U_EM`` channel, else ``flight``.
     ValueError
         An invalid ``speed.em_scale``, or a non-pressure method that cannot
         produce a speed (missing or all-NaN channel, ...).
@@ -226,9 +287,11 @@ def compute_speed_for_pfile(
     # underestimates the along-path flow past the sensors; epsilon has ~U^4
     # leverage, so this strongly biases epsilon high. On a glider that is an
     # ERROR (Pat Welch, 2026-11-04): it used to be only a warning, which the
-    # perturb worker logs hid. The vehicle string decides, not
-    # profiles.direction: a glider MicroRider that records only its climbs
-    # sets direction "up" and is still a glider. Another horizontal platform
+    # perturb worker logs hid. The vehicle string decides, and so does a
+    # configured profiles.direction "glide" (or a MicroRider model) when
+    # instrument_info is empty, as on Taiwan 2013 husker and Tanaka SN058: a
+    # glider MicroRider that records only its climbs sets direction "up" and
+    # is still a glider by its vehicle. Another horizontal platform
     # still only warns (audit r2-3, below). VMP (down/up) is unaffected.
     # Checked before anything else here can raise: process_file treats any
     # other failure under the default method as recoverable and falls back to
@@ -239,11 +302,13 @@ def compute_speed_for_pfile(
     # Before the method dispatch: a factor under a method that does not use
     # U_EM is an error, not a no-op.
     em_scale = em_scale_from_cfg(cfg)
-    direction = resolve_direction("auto", vehicle or "")
-    if method == "pressure" and direction == "glide":
-        raise PressureSpeedOnGliderError(
-            pressure_speed_on_glider_message(vehicle or "", "U_EM" in pf.channels)
-        )
+    direction_vehicle = resolve_direction("auto", vehicle or "")
+    if method == "pressure":
+        basis = glider_basis(vehicle, _instrument_model(pf), direction)
+        if basis is not None:
+            raise PressureSpeedOnGliderError(
+                pressure_speed_on_glider_message(basis, "U_EM" in pf.channels)
+            )
     speed_cutout = float(cfg.get("speed_cutout", 0.05))
     tau = float(cfg.get("tau") or resolve_tau(vehicle or ""))
 
@@ -258,9 +323,9 @@ def compute_speed_for_pfile(
 
     if method == "pressure":
         # A glider was refused above.
-        if direction == "horizontal":
+        if direction_vehicle == "horizontal":
             warnings.warn(
-                f"Vehicle direction '{direction}' but speed.method='pressure' "
+                f"Vehicle direction '{direction_vehicle}' but speed.method='pressure' "
                 "computes speed from |dP/dt| (vertical); set speed.method="
                 "'em' (U_EM), 'hotel', or 'constant' with speed.value — "
                 "epsilon scales as ~U^4 and will be strongly biased",

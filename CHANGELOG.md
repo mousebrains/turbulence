@@ -6,22 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-- **`speed.method: pressure` on a glider is an error (perturb).** On a
-  `slocum_glider`, `sea_glider` or `sea_explorer` file, \|dP/dt\| is the
-  vertical rate, not the flow past the sensors, and it used to be accepted with
-  a warning that only the worker logs showed. The RIOT 2026 shakedown
-  MicroRiders were processed that way: against 0.93 x U_EM, the median epsilon
-  came out ~6x high (3-14x per window, 5-95%) and chi ~3x.
-  `compute_speed_for_pfile` now raises `PressureSpeedOnGliderError` (a
-  `ValueError`), and `process_file` aborts the file with it even under the
-  default method, whose other speed failures still only warn and fall back. The
-  message points to `em` (and `em_scale`) when the file has `U_EM`, else to
-  `flight` or a `hotel` flight-model speed, and states the remedy first so the
-  run summary's 200-character line keeps it. Because `pressure` is the default, a glider config with no `speed:`
-  block is refused too. The vehicle decides, not `profiles.direction`. Other
-  horizontal platforms still warn.
-
 ### Added
 - **`speed.em_scale`: a gain factor on the EM flowmeter speed (perturb,
   `speed.method: em`).** Speed = `em_scale * |U_EM|`, applied before the
@@ -380,6 +364,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   record costs about 70 s of epsilon/chi: the P_dP span is dilated by three
   deconvolution time constants. See `docs/rsi-tpw/odas_file_format.md`,
   "Record framing".
+
+### Changed
+- **`speed.method: pressure` on a glider is an error (perturb).** On a glider,
+  \|dP/dt\| is the vertical rate, not the flow past the sensors, and it used
+  to be accepted with a warning that only the worker logs showed. The RIOT 2026
+  shakedown MicroRiders were processed that way: against 0.93 x U_EM, the
+  median epsilon came out ~6x high and chi ~3x. `compute_speed_for_pfile` now
+  raises `PressureSpeedOnGliderError` (a `ValueError`), and `process_file`
+  aborts the file with it even under the default method, whose other speed
+  failures still only warn and fall back. Because `pressure` is the default, a
+  glider config with no `speed:` block is refused too. A file is a glider
+  (`glider_basis`) when its `vehicle` is `slocum_glider`, `sea_glider` or
+  `sea_explorer`; when the configured `profiles.direction` is `glide`, which
+  catches glider files with an empty `instrument_info` (Taiwan 2013 husker,
+  Tanaka unit211 SN058); or when it has no `vehicle` and a MicroRider `model`
+  (raw Rutgers RU33 originals). Any refused file also makes the run a stage
+  failure, so the CLI exits 1: a run that refused every file used to exit 0
+  with no products. The message names both remedies first, so the run
+  summary's 200-character line keeps them: `em` (and `em_scale`) when the
+  file has `U_EM`, else `flight` or a `hotel` flight-model speed. Other
+  horizontal platforms still warn, and `rsi-tpw` is unchanged (it still only
+  warns).
 
 ### Fixed
 - **The chi noise model now uses the FP07 coefficients the data were

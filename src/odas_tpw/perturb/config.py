@@ -1714,8 +1714,8 @@ speed:
   method: "pressure"      # pressure | em | flight | constant | hotel
   # pressure : ODAS smoothed |dP/dt|. Correct for VMP. (default)
   #            An ERROR on a glider (vehicle slocum_glider / sea_glider /
-  #            sea_explorer), where |dP/dt| is the vertical rate: use em
-  #            (with U_EM) or flight.
+  #            sea_explorer, or profiles.direction glide), where |dP/dt| is
+  #            the vertical rate: use em (with U_EM), flight, or hotel.
   # em       : use the U_EM channel from the .p file (MicroRider EM
   #            flowmeter). Errors out if U_EM is missing.
   # flight   : |W| / sin(|pitch|+aoa) (glide path steeper than pitch;

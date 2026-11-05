@@ -129,7 +129,7 @@ class TestPressureMethod:
             )
         msg = str(err.value)
         assert "speed.method: em" in msg and "speed.em_scale" in msg
-        assert "speed.method: flight" in msg
+        assert "or flight" in msg
 
     @pytest.mark.parametrize("bad", [{"tau": 0.001}, {"tau": -1}, {"speed_cutout": "x"}])
     def test_glider_refused_before_anything_else_can_raise(self, vmp_descent, bad):
@@ -143,17 +143,62 @@ class TestPressureMethod:
                 vmp_descent, {"method": "pressure", **bad}, vehicle="slocum_glider",
             )
 
-    @pytest.mark.parametrize("has_u_em, remedy", [(True, "speed.method: em"),
-                                                  (False, "speed.method: flight")])
-    def test_remedy_survives_the_run_summary(self, has_u_em, remedy):
-        """The run summary clips each line at 200 characters; the remedy must
-        be inside them, after a realistic file prefix."""
+    @pytest.mark.parametrize("has_u_em, remedies", [
+        (True, ("speed.method: em", "or flight (if U_EM is unreliable).")),
+        (False, ("speed.method: flight", "or hotel (a flight-model speed).")),
+    ])
+    @pytest.mark.parametrize("basis", [
+        "vehicle 'slocum_glider'", "profiles.direction 'glide'", "model 'MR1000RDL-EM'",
+    ])
+    def test_both_remedies_survive_the_run_summary(self, has_u_em, remedies, basis):
+        """The run summary clips each line at 200 characters; both remedies
+        must be inside them, after a long realistic file prefix."""
         from odas_tpw.perturb.pipeline import _summary_lines
         from odas_tpw.rsi.speed import pressure_speed_on_glider_message
 
-        msg = pressure_speed_on_glider_message("slocum_glider", has_u_em)
-        (line,) = _summary_lines("file error:  ", [f"RIOTSHAKE_MR435_0123.p: speed: {msg}"])
-        assert remedy in line
+        msg = pressure_speed_on_glider_message(basis, has_u_em)
+        name = "ARCTERX_Thompson_2025_SN479_0001.p"
+        (line,) = _summary_lines("file error:  ", [f"{name}: speed: {msg}"])
+        assert basis in line
+        for remedy in remedies:
+            assert remedy in line
+
+    def test_empty_vehicle_with_glide_direction_is_refused(self, vmp_descent):
+        """A glider file whose instrument_info is empty (Taiwan 2013 husker,
+        Tanaka SN058) is known only by its recipe's direction: glide."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        with pytest.raises(PressureSpeedOnGliderError, match=r"profiles\.direction 'glide'"):
+            compute_speed_for_pfile(vmp_descent, {}, vehicle="", direction="glide")
+
+    def test_empty_vehicle_with_microrider_model_is_refused(self, vmp_descent):
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        vmp_descent.config = {"instrument_info": {"model": "MR1000EM"}}
+        with pytest.raises(PressureSpeedOnGliderError, match="model 'MR1000EM'"):
+            compute_speed_for_pfile(vmp_descent, {}, vehicle="", direction="auto")
+
+    @pytest.mark.parametrize("info, direction", [
+        ({}, "auto"), ({}, None), ({"model": "VMP-250IR"}, "down"), ({"model": None}, "auto"),
+    ])
+    def test_empty_vehicle_vmp_is_not_refused(self, vmp_descent, info, direction):
+        """An empty vehicle (CASPER SN142 has one) without a glider sign is
+        still a VMP: the pressure method runs."""
+        vmp_descent.config = {"instrument_info": info}
+        speed_fast, _, source = compute_speed_for_pfile(
+            vmp_descent, {}, vehicle="", direction=direction,
+        )
+        assert source == "pressure"
+        np.testing.assert_allclose(np.median(speed_fast[1000:-1000]), 0.5, atol=0.02)
+
+    def test_glide_direction_does_not_touch_other_methods(self, glider_with_em):
+        """direction is read only by the pressure refusal."""
+        a = compute_speed_for_pfile(glider_with_em, {"method": "em"}, vehicle="")
+        b = compute_speed_for_pfile(
+            glider_with_em, {"method": "em"}, vehicle="", direction="glide",
+        )
+        np.testing.assert_array_equal(a[0], b[0])
+        assert a[2] == b[2]
 
     def test_glider_refusal_is_a_value_error(self):
         """Callers that catch ValueError for a bad speed configuration still do."""
@@ -834,6 +879,41 @@ class TestEMScaleConfig:
             cfg.load_config(p)
 
 
+class TestGliderBasis:
+    """What makes a file a glider for the pressure refusal."""
+
+    @pytest.mark.parametrize("vehicle, model, direction, expected", [
+        ("slocum_glider", None, None, "vehicle 'slocum_glider'"),
+        ("Sea_Glider ", None, "up", "vehicle 'sea_glider'"),
+        ("sea_explorer", "", "down", "vehicle 'sea_explorer'"),
+        ("", None, "glide", "profiles.direction 'glide'"),
+        ("", "", "GLIDE", "profiles.direction 'glide'"),
+        ("auv", None, "glide", "profiles.direction 'glide'"),
+        ("", "MR1000EM", "auto", "model 'MR1000EM'"),
+        ("", "mr1000rdl-em", None, "model 'mr1000rdl-em'"),
+        ("", "MicroRider-1000", None, "model 'MicroRider-1000'"),
+        (None, None, None, None),
+        ("", "", "auto", None),
+        ("", "VMP-250IR", "down", None),
+        ("vmp", "MR1000", None, None),
+        ("auv", "MR1000", "horizontal", None),
+        ("", "HMR-2", None, None),
+        ("", "", "up", None),
+    ])
+    def test_cases(self, vehicle, model, direction, expected):
+        from odas_tpw.rsi.speed import glider_basis
+
+        assert glider_basis(vehicle, model, direction) == expected
+
+    def test_glider_vehicles_are_the_glide_vehicles(self):
+        from odas_tpw.rsi.speed import GLIDER_VEHICLES
+        from odas_tpw.rsi.vehicle import VEHICLE_ATTRIBUTES, resolve_direction
+
+        assert {"slocum_glider", "sea_glider", "sea_explorer"} == GLIDER_VEHICLES
+        for name in VEHICLE_ATTRIBUTES:
+            assert (name in GLIDER_VEHICLES) == (resolve_direction("auto", name) == "glide")
+
+
 class TestGliderPressureRefusedInPerturb:
     """process_file aborts a glider file under the pressure method instead of
     falling back to |dP/dt| (the fallback that hid the RIOT 2026 defect)."""
@@ -856,7 +936,7 @@ class TestGliderPressureRefusedInPerturb:
         result, dirs = self._run(tmp_path, speed)
         errors = result.get("errors") or []
         assert len(errors) == 1 and errors[0].startswith(
-            "speed: speed.method 'pressure' is refused on a glider")
+            "speed: speed.method 'pressure' refused on a glider")
         assert "slocum_glider" in errors[0] and "speed.method: em" in errors[0]
         assert result["profiles"] == []
         assert not any(dirs["profiles"].glob("*.nc"))
@@ -872,3 +952,60 @@ class TestGliderPressureRefusedInPerturb:
     def test_em_is_not_aborted(self, tmp_path):
         result, _ = self._run(tmp_path, {"method": "em"})
         assert not any(str(e).startswith("speed:") for e in result.get("errors") or [])
+        assert not result.get("speed_refused")
+
+    def test_empty_instrument_info_with_glide_direction(self, tmp_path, monkeypatch):
+        """The real file with its instrument_info emptied, as on Taiwan 2013
+        husker MR046 and Tanaka SN058: refused by profiles.direction glide.
+        Before glider_basis it ran silently on |dP/dt| (review of 82ee775)."""
+        import odas_tpw.rsi.p_file as pfm
+        from odas_tpw.perturb.pipeline import process_file
+
+        if not self.FIXTURE.exists():
+            pytest.skip("MR_SL435.p test data not available")
+
+        class EmptyInfoPFile(pfm.PFile):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.config["instrument_info"] = {}
+
+        monkeypatch.setattr(pfm, "PFile", EmptyInfoPFile)
+        dirs = {k: tmp_path / k for k in ("profiles", "diss", "chi")}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = process_file(self.FIXTURE, {"profiles": {"direction": "glide"}}, None, dirs)
+        errors = result.get("errors") or []
+        assert len(errors) == 1 and "profiles.direction 'glide'" in errors[0]
+        assert result["speed_refused"] is True
+        assert result["profiles"] == []
+
+    def test_run_is_a_stage_failure(self, tmp_path):
+        """A refused file makes the run fail (exit 1), even with no profiles
+        for _empty_product_stage_errors to gate on."""
+        from odas_tpw.perturb.pipeline import run_pipeline
+
+        if not self.FIXTURE.exists():
+            pytest.skip("MR_SL435.p test data not available")
+        config = {
+            "files": {"output_root": str(tmp_path / "out"),
+                      "p_file_root": str(self.FIXTURE.parent), "trim": False, "merge": False},
+            "chi": {"enable": False},
+            "ctd": {"enable": False},
+            "parallel": {"jobs": 1},
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            outcome = run_pipeline(config, p_files=[self.FIXTURE])
+        assert not outcome.ok
+        assert len(outcome.stage_errors) == 1
+        assert outcome.stage_errors[0].startswith(
+            "speed: 1 file(s) refused, speed.method 'pressure' on a glider (first MR_SL435.p)")
+        assert len(outcome.file_errors) == 1
+
+
+def test_speed_refusal_stage_errors():
+    from odas_tpw.perturb.pipeline import _speed_refusal_stage_errors
+
+    assert _speed_refusal_stage_errors([]) == []
+    (err,) = _speed_refusal_stage_errors(["b.p", "a.p"])
+    assert err.startswith("speed: 2 file(s) refused") and "(first a.p)" in err
