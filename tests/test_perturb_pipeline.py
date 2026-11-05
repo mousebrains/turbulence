@@ -1271,10 +1271,10 @@ def _speed_stage_not_under_test(*args, **kwargs):
 
     The default speed method on a glider is refused
     (PressureSpeedOnGliderError), which would abort the file before the stage
-    under test. Any other failure takes the default method's
-    warn-and-continue path, which is what these tests relied on before.
+    under test. This returns what the real stage returned on these MagicMock
+    files before the refusal existed, so nothing else changes for them.
     """
-    raise RuntimeError("speed stage not under test")
+    return np.zeros(0), np.zeros(100), "pressure"
 
 
 class TestProcessFile:

@@ -131,6 +131,30 @@ class TestPressureMethod:
         assert "speed.method: em" in msg and "speed.em_scale" in msg
         assert "speed.method: flight" in msg
 
+    @pytest.mark.parametrize("bad", [{"tau": 0.001}, {"tau": -1}, {"speed_cutout": "x"}])
+    def test_glider_refused_before_anything_else_can_raise(self, vmp_descent, bad):
+        """A malformed speed setting raises an ordinary error, which perturb
+        would treat as a recoverable failure of the default method and fall
+        back to |dP/dt|: the glider refusal must come first (review of 1cfc488)."""
+        from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
+        with pytest.raises(PressureSpeedOnGliderError):
+            compute_speed_for_pfile(
+                vmp_descent, {"method": "pressure", **bad}, vehicle="slocum_glider",
+            )
+
+    @pytest.mark.parametrize("has_u_em, remedy", [(True, "speed.method: em"),
+                                                  (False, "speed.method: flight")])
+    def test_remedy_survives_the_run_summary(self, has_u_em, remedy):
+        """The run summary clips each line at 200 characters; the remedy must
+        be inside them, after a realistic file prefix."""
+        from odas_tpw.perturb.pipeline import _summary_lines
+        from odas_tpw.rsi.speed import pressure_speed_on_glider_message
+
+        msg = pressure_speed_on_glider_message("slocum_glider", has_u_em)
+        (line,) = _summary_lines("file error:  ", [f"RIOTSHAKE_MR435_0123.p: speed: {msg}"])
+        assert remedy in line
+
     def test_glider_refusal_is_a_value_error(self):
         """Callers that catch ValueError for a bad speed configuration still do."""
         from odas_tpw.rsi.speed import PressureSpeedOnGliderError
@@ -831,10 +855,19 @@ class TestGliderPressureRefusedInPerturb:
     def test_aborted_with_the_reason(self, tmp_path, speed):
         result, dirs = self._run(tmp_path, speed)
         errors = result.get("errors") or []
-        assert len(errors) == 1 and errors[0].startswith("speed: speed.method is 'pressure'")
+        assert len(errors) == 1 and errors[0].startswith(
+            "speed: speed.method 'pressure' is refused on a glider")
         assert "slocum_glider" in errors[0] and "speed.method: em" in errors[0]
         assert result["profiles"] == []
         assert not any(dirs["profiles"].glob("*.nc"))
+
+    def test_malformed_tau_does_not_reopen_the_fallback(self, tmp_path):
+        """speed.tau = 0.001 used to fail inside the stage first, which the
+        default method's warn-and-continue turned into |dP/dt| products."""
+        result, _ = self._run(tmp_path, {"tau": 0.001})
+        errors = result.get("errors") or []
+        assert len(errors) == 1 and "refused on a glider" in errors[0]
+        assert result["profiles"] == []
 
     def test_em_is_not_aborted(self, tmp_path):
         result, _ = self._run(tmp_path, {"method": "em"})

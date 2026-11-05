@@ -17,7 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ValueError`), and `process_file` aborts the file with it even under the
   default method, whose other speed failures still only warn and fall back. The
   message points to `em` (and `em_scale`) when the file has `U_EM`, else to
-  `flight`. Because `pressure` is the default, a glider config with no `speed:`
+  `flight` or a `hotel` flight-model speed, and states the remedy first so the
+  run summary's 200-character line keeps it. Because `pressure` is the default, a glider config with no `speed:`
   block is refused too. The vehicle decides, not `profiles.direction`. Other
   horizontal platforms still warn.
 

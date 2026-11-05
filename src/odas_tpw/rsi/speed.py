@@ -86,22 +86,23 @@ class PressureSpeedOnGliderError(ValueError):
 
 
 def pressure_speed_on_glider_message(vehicle: str, has_u_em: bool) -> str:
-    """The refusal text, naming the method this file can use instead."""
-    head = (
-        f"speed.method is 'pressure', but this is a glider (vehicle {vehicle!r}): "
-        "|dP/dt| is the vertical rate, not the flow past the sensors, so epsilon "
-        "(~U^-4) and chi (~U^-2) would be biased high. "
+    """The refusal text. The remedy comes first: the run summary clips each
+    line at 200 characters, and the file name and prefix take ~30 of them."""
+    head = f"speed.method 'pressure' is refused on a glider (vehicle {vehicle!r}): "
+    why = (
+        " |dP/dt| is the vertical rate, not the flow past the sensors, so epsilon "
+        "(~U^-4) and chi (~U^-2) would be biased high."
     )
     if has_u_em:
         return head + (
-            "This file has a U_EM channel: set speed.method: em, with "
-            "speed.em_scale and speed.em_correction_note to apply a published "
-            "U_EM factor (e.g. 0.93, Merckelbach et al. 2019), or speed.method: "
-            "flight if the flowmeter is unreliable."
+            "set speed.method: em (this file has U_EM; speed.em_scale and "
+            "speed.em_correction_note apply a published factor, e.g. 0.93 from "
+            "Merckelbach et al. 2019), or speed.method: flight if the flowmeter "
+            "is unreliable." + why
         )
     return head + (
-        "This file has no U_EM channel, so the flight model is the option: set "
-        "speed.method: flight (U = |W| / sin(|pitch| + aoa_deg))."
+        "set speed.method: flight (U = |W| / sin(|pitch| + aoa_deg); this file has "
+        "no U_EM), or speed.method: hotel with an external flight-model speed." + why
     )
 
 
@@ -221,9 +222,28 @@ def compute_speed_for_pfile(
 
     cfg = speed_cfg or {}
     method = cfg.get("method", "pressure")
+    # For a glider / horizontal platform, |dP/dt| is the VERTICAL speed and
+    # underestimates the along-path flow past the sensors; epsilon has ~U^4
+    # leverage, so this strongly biases epsilon high. On a glider that is an
+    # ERROR (Pat Welch, 2026-11-04): it used to be only a warning, which the
+    # perturb worker logs hid. The vehicle string decides, not
+    # profiles.direction: a glider MicroRider that records only its climbs
+    # sets direction "up" and is still a glider. Another horizontal platform
+    # still only warns (audit r2-3, below). VMP (down/up) is unaffected.
+    # Checked before anything else here can raise: process_file treats any
+    # other failure under the default method as recoverable and falls back to
+    # the very |dP/dt| this refuses (a bad speed.tau did exactly that). The one
+    # exception is em_scale, a pure config check that process_file also runs
+    # OUTSIDE that fallback, so its own message wins for a factor under
+    # method pressure.
     # Before the method dispatch: a factor under a method that does not use
     # U_EM is an error, not a no-op.
     em_scale = em_scale_from_cfg(cfg)
+    direction = resolve_direction("auto", vehicle or "")
+    if method == "pressure" and direction == "glide":
+        raise PressureSpeedOnGliderError(
+            pressure_speed_on_glider_message(vehicle or "", "U_EM" in pf.channels)
+        )
     speed_cutout = float(cfg.get("speed_cutout", 0.05))
     tau = float(cfg.get("tau") or resolve_tau(vehicle or ""))
 
@@ -237,19 +257,7 @@ def compute_speed_for_pfile(
     W_slow = smooth_fall_rate(P_slow, fs_slow, tau=tau)
 
     if method == "pressure":
-        # For a glider / horizontal platform, |dP/dt| is the VERTICAL speed and
-        # underestimates the along-path flow past the sensors; epsilon has ~U^4
-        # leverage, so this strongly biases epsilon high. On a glider that is an
-        # ERROR (Pat Welch, 2026-11-04): it used to be only a warning, which the
-        # perturb worker logs hid. The vehicle string decides, not
-        # profiles.direction: a glider MicroRider that records only its climbs
-        # sets direction "up" and is still a glider. Another horizontal
-        # platform still only warns (audit r2-3). VMP (down/up) is unaffected.
-        direction = resolve_direction("auto", vehicle or "")
-        if direction == "glide":
-            raise PressureSpeedOnGliderError(
-                pressure_speed_on_glider_message(vehicle or "", "U_EM" in pf.channels)
-            )
+        # A glider was refused above.
         if direction == "horizontal":
             warnings.warn(
                 f"Vehicle direction '{direction}' but speed.method='pressure' "
@@ -292,7 +300,7 @@ def compute_speed_for_pfile(
         if "U_EM" not in pf.channels:
             raise ValueError(
                 "speed.method='em' but channel U_EM is missing from the "
-                "source. Use 'flight' or 'pressure' instead."
+                "source. Use 'flight' (a glider) or 'pressure' (a profiler) instead."
             )
         U_em_slow = np.abs(np.asarray(pf.channels["U_EM"], dtype=np.float64))
         if not np.isfinite(U_em_slow).any():
@@ -329,7 +337,8 @@ def compute_speed_for_pfile(
                 f"interior gap of {gap:.1f} s (limit {max_gap:g} s). Interpolating "
                 "across that would fabricate a measured speed and publish it with "
                 "provenance 'em'; epsilon has ~U^4 leverage. Use speed.method="
-                "'flight'/'pressure', or raise speed.max_gap_s deliberately."
+                "'flight' (or 'pressure' on a profiler), or raise speed.max_gap_s "
+                "deliberately."
             )
         speed_fast = _slow_to_fast(
             U_em_slow, t_fast, t_slow, fs_fast, fs_slow, tau=tau, speed_min=speed_cutout
@@ -387,7 +396,8 @@ def compute_speed_for_pfile(
                 f"interior gap (limit {max_gap:g} s; coverage {100 * frac:.1f}%). "
                 "Interpolating across it would fabricate through-water speed for "
                 "a stretch the model could not resolve. Lower min_pitch_deg, use "
-                "speed.method='pressure', or raise speed.max_gap_s deliberately."
+                "speed.method='em' (with U_EM), or raise speed.max_gap_s "
+                "deliberately."
             )
         speed_fast = _slow_to_fast(
             speed_slow, t_fast, t_slow, fs_fast, fs_slow, tau=tau, speed_min=speed_cutout
@@ -637,7 +647,8 @@ def _flight_model_slow(
     if iX is None or iY is None:
         raise ValueError(
             "speed.method='flight' needs Incl_X and Incl_Y channels in the "
-            ".p file. Use 'pressure' or 'em' instead."
+            ".p file. Use 'em' (with U_EM), 'hotel' (an external flight model), or "
+            "'pressure' on a profiler instead."
         )
     lo_q, hi_q = float(amplitude_quantile[0]), float(amplitude_quantile[1])
     iX_rng = float(np.nanpercentile(iX, hi_q) - np.nanpercentile(iX, lo_q))

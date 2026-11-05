@@ -123,7 +123,8 @@ def setup_root_logging(
         sh.setFormatter(_STREAM_FORMATTER)
         root.addHandler(_mark_owned(sh))
 
-    # Route warnings.warn(...) (e.g. the glider |dP/dt| speed-bias warning)
+    # Route warnings.warn(...) (e.g. the |dP/dt| speed-bias warning on a
+    # horizontal platform; on a glider it is now an error)
     # through the "py.warnings" logger, which propagates to the root handlers
     # installed above — so UserWarnings land in the run/worker/stage logs
     # instead of vanishing to an unwatched stderr. Set here (and in
