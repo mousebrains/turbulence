@@ -92,8 +92,8 @@ vibration.
   - Vehicle/direction: rely on `.p` `instrument_info` = `slocum_glider`; set
     `profiles.direction: auto` (resolves to `glide`).
   - `speed.method`: **decision point** — `flight` (needs pitch; `aoa_deg` ~3),
-    `em` (needs `U_EM`), hotel telemetry, or `constant`. Explain the ε bias of the
-    default `pressure` on a glider.
+    `em` (needs `U_EM`), hotel telemetry, or `constant`. The default `pressure`
+    is refused on a glider (its ε bias is why).
   - `chi.enable: true`, `chi.use_epsilon: false` (Method 2), pick `spectrum_model`.
   - Salinity: `epsilon.salinity` / `chi.salinity` — assumed constant, **or**
     `"measured"` only if a glider CTD is supplied via hotel.

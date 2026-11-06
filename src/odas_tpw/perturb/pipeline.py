@@ -3375,7 +3375,12 @@ def process_file(
             from odas_tpw.perturb.speed import compute_speed_for_pfile
 
             vehicle = pf.config.get("instrument_info", {}).get("vehicle", "").lower()
-            speed_fast, W_slow, speed_source = compute_speed_for_pfile(pf, speed_cfg, vehicle)
+            # profiles.direction marks a glider whose instrument_info is empty
+            # (rsi.speed.glider_basis); only the pressure refusal reads it.
+            profiles_direction = str((config.get("profiles") or {}).get("direction") or "")
+            speed_fast, W_slow, speed_source = compute_speed_for_pfile(
+                pf, speed_cfg, vehicle, direction=profiles_direction
+            )
             speed_method = str(speed_cfg.get("method", "pressure"))
             speed_attrs = {
                 "speed_method": speed_method,
@@ -3441,8 +3446,12 @@ def process_file(
                 "long_name": "profiling rate (smoothed |dP/dt|)",
             }
         except Exception as exc:
+            from odas_tpw.rsi.speed import PressureSpeedOnGliderError
+
             method_cfg = str(speed_cfg.get("method", "pressure"))
-            if method_cfg != "pressure":
+            # A glider under the pressure method is refused, not degraded: the
+            # fallback below would publish the very |dP/dt| it refuses.
+            if method_cfg != "pressure" or isinstance(exc, PressureSpeedOnGliderError):
                 # An explicitly selected non-pressure speed source (em /
                 # flight / constant / hotel — "pressure" is the DEFAULT, so a
                 # non-pressure method here is always user-configured) failed:
@@ -3459,6 +3468,10 @@ def process_file(
                     exc,
                 )
                 result.setdefault("errors", []).append(f"speed: {exc}")
+                if isinstance(exc, PressureSpeedOnGliderError):
+                    # A configuration error: the run turns it into a stage
+                    # error (exit 1), see _speed_refusal_stage_errors.
+                    result["speed_refused"] = True
                 return result
             # Default pressure method: the downstream fallback recomputes the
             # same |dP/dt|, so continuing is honest — warn and carry on.
@@ -4541,6 +4554,24 @@ def _empty_product_stage_errors(
     return errors
 
 
+def _speed_refusal_stage_errors(names: list[str]) -> list[str]:
+    """One stage error when any file was refused for ``speed.method: pressure``
+    on a glider (:class:`~odas_tpw.rsi.speed.PressureSpeedOnGliderError`).
+
+    The refusal is a configuration error and hits every glider file of a run
+    alike. As file errors alone, a run that refused every file wrote no
+    profiles, so :func:`_empty_product_stage_errors` had nothing to gate on,
+    and it exited 0. The remedy is in each file error.
+    """
+    if not names:
+        return []
+    names = sorted(names)
+    return [
+        f"speed: {len(names)} file(s) refused, speed.method 'pressure' on a glider "
+        f"(first {names[0]}): set speed.method; each file error names the remedy"
+    ]
+
+
 def _file_errors(name: str, result: Any) -> list[str]:
     """Per-file failures recorded by :func:`process_file`, prefixed with *name*.
 
@@ -5345,6 +5376,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
         logger.info("Processing %d files (jobs=%d)...", len(to_process), jobs)
 
     fp07_outcomes: dict[str, dict] = {}
+    speed_refused: list[str] = []
     strat_outcomes: dict[str, dict] = {}
     exclusion_outcomes: dict[str, dict] = {}
     # Keyed by output stem, not file name: same-named .p files in different
@@ -5377,6 +5409,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
             )
             logger.info("%s", _done_message(p_path.name, result))
             outcome.file_errors += _file_errors(p_path.name, result)
+            if isinstance(result, dict) and result.get("speed_refused"):
+                speed_refused.append(p_path.name)
             if isinstance(result, dict) and "fp07" in result:
                 fp07_outcomes[p_path.name] = result["fp07"]
             if isinstance(result, dict) and result.get("stratification"):
@@ -5417,6 +5451,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     result = future.result()
                     logger.info("%s", _done_message(p.name, result))
                     outcome.file_errors += _file_errors(p.name, result)
+                    if isinstance(result, dict) and result.get("speed_refused"):
+                        speed_refused.append(p.name)
                     if isinstance(result, dict) and "fp07" in result:
                         fp07_outcomes[p.name] = result["fp07"]
                     if isinstance(result, dict) and result.get("stratification"):
@@ -5432,6 +5468,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                     logger.error("processing %s: %s", p.name, exc)
                     outcome.file_errors.append(f"{p.name}: {exc}")
 
+    outcome.stage_errors += _speed_refusal_stage_errors(speed_refused)
     outcome.notices += _fp07_notices(fp07_outcomes)
     run_strat = merge_config("stratification", config.get("stratification"))
     run_sort = run_strat.get("sort") or _DEFAULT_SORT

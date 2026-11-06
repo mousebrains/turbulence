@@ -1266,6 +1266,17 @@ class TestRunMerge:
 # ---------------------------------------------------------------------------
 
 
+def _speed_stage_not_under_test(*args, **kwargs):
+    """Stand-in for the speed stage in tests of OTHER stages on a mock glider.
+
+    The default speed method on a glider is refused
+    (PressureSpeedOnGliderError), which would abort the file before the stage
+    under test. This returns what the real stage returned on these MagicMock
+    files before the refusal existed, so nothing else changes for them.
+    """
+    return np.zeros(0), np.zeros(100), "pressure"
+
+
 class TestProcessFile:
     """Tests for process_file using mocked heavy dependencies."""
 
@@ -1343,6 +1354,7 @@ class TestProcessFile:
         result = process_file(tmp_path / "test.p", config, None, output_dirs)
         assert result["profiles"] == []
 
+    @patch("odas_tpw.perturb.speed.compute_speed_for_pfile", new=_speed_stage_not_under_test)
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
     @patch("odas_tpw.rsi.profile.get_profiles")
@@ -1378,6 +1390,7 @@ class TestProcessFile:
             f"slocum_glider 'auto' should resolve to 'glide', got {kwargs['direction']!r}"
         )
 
+    @patch("odas_tpw.perturb.speed.compute_speed_for_pfile", new=_speed_stage_not_under_test)
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
     @patch("odas_tpw.rsi.profile.get_profiles")
@@ -1405,6 +1418,7 @@ class TestProcessFile:
         kwargs = mock_get_prof.call_args.kwargs
         assert kwargs["direction"] == "down"
 
+    @patch("odas_tpw.perturb.speed.compute_speed_for_pfile", new=_speed_stage_not_under_test)
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
     @patch("odas_tpw.rsi.profile.get_profiles")
@@ -1436,6 +1450,7 @@ class TestProcessFile:
         assert kwargs["direction"] == "glide"
         assert kwargs["W_min"] == 0.05
 
+    @patch("odas_tpw.perturb.speed.compute_speed_for_pfile", new=_speed_stage_not_under_test)
     @patch("odas_tpw.rsi.profile.extract_profiles", return_value=([Path("/fake/prof.nc")], [{}]))
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
     @patch("odas_tpw.rsi.profile.get_profiles")
@@ -1467,6 +1482,7 @@ class TestProcessFile:
         "odas_tpw.rsi.profile.extract_profiles",
         return_value=([Path("/fake/prof.nc")], [{}]),
     )
+    @patch("odas_tpw.perturb.speed.compute_speed_for_pfile", new=_speed_stage_not_under_test)
     @patch("odas_tpw.perturb.fp07_cal.fp07_calibrate")
     @patch("odas_tpw.rsi.profile.get_profiles", return_value=[(0, 99)])
     @patch("odas_tpw.rsi.profile._smooth_fall_rate", return_value=np.zeros(100))
