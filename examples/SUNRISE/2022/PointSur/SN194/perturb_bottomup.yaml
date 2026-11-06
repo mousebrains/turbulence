@@ -227,5 +227,30 @@ netcdf:
   standard_name_vocabulary: "CF Standard Name Table v89"
   Conventions: "CF-1.13, ACDD-1.3"
 
+instruments:
+  SN194:                    # the RAW DIRECTORY NAME of the .p files
+    # Bead T2005 loses ~12% of its amplitude through a slow parallel response
+    # path (beta 0.124, tau_s 110 ms; issue #252, PR #254), which its pairs
+    # show as ln G ~ -0.27: before this its chi read ~1.2-1.3x low. chi divides
+    # the path out of T2005's spectra. Keyed by BEAD serial, so a file without
+    # T2005 (2021 Pelican before SR1P_518, T1593 on T2) keeps its chi.
+    # Values: the 152-file per-deployment measurement (beta 0.122-0.128,
+    # tau_s 105-112 ms; 0.09-0.13 across single-pole model choices).
+    # Added 2026-11-05 (Pat 2026-11-04: correct T2005 in all five SN194 sets).
+    fp07_slow_response:
+      T2005: {beta: 0.124, tau_s_ms: 110,
+              first: "2021-06-29T18:00:00Z", last: "2022-06-20T08:30:00Z"}
+    # From 2022-06-20 ~08:30Z T2005's FAST response breaks down: its fitted
+    # tau falls 22 -> 9.7 -> 5.8 -> ~0 ms and the 25-31 Hz ln(T2/T1) ratio
+    # climbs -0.95 -> +2.44 over the following days, while the slow path fades
+    # (beta 0.127 -> 0.02 by 07-03). Neither correction describes that, so T2
+    # is EXCLUDED from then on, not corrected. Files starting after the span's
+    # last are computed uncorrected (and say so); this entry keeps their T2
+    # out of chiMean, and masks the tail of SR2S_012 (starts 07:07:55Z).
+    exclude:
+      - probe: T2
+        start: "2022-06-20T08:30:00Z"
+        reason: "T2005 response breaks down from 2022-06-20 ~08:30Z (issue #252); excluded, not corrected"
+
 parallel:
   jobs: 3                   # SeaChest is SMB; 8 has produced HDF read failures
