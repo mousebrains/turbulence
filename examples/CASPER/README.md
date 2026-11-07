@@ -14,9 +14,17 @@ glider `doug`, both times.
 | `2017_West/gliders/doug/` | **CASPER-West**, R/V *Sally Ride* SR1715, off Point Mugu CA, Sep–Oct 2017. |
 | `2017_West/vmp/` | VMP-250IR SN 194, the same cruise as CASPER-West |
 
-All three were reprocessed on main 98b4206 on 2026-10-17; each README says what
-changed. The VMP's SeaChest config had been truncated on 2026-09-21 and is
-restored from `2017_West/vmp/perturb.yaml` (see its header).
+All three were reprocessed on main 98b4206 on 2026-10-17. CASPER-East doug was
+rerun on 2aa9caf on 2026-11-03 (#257), and CASPER-West doug and the VMP on
+8748b90 on 2026-11-05; each glider README says what changed. The VMP's
+SeaChest config had been truncated on 2026-09-21 and is restored from
+`2017_West/vmp/perturb.yaml` (see its header).
+
+The VMP (2,086 profiles), 8748b90 against 98b4206: ε, N² and dT/dz
+bit-identical (115,534 windows); χ ×0.91 (paired per-window median of
+`chiMean`, 5–95% 0.59–1.00), the combined `chiMean` median ×0.86
+(1.06e-8 → 9.1e-9 K²/s), Γ 0.117 → 0.102. It is #263 (χ no longer uses FFT
+bin 1): a rerun with `chi.first_bin: 1` restores the old χ to within ±1%.
 
 The recipe is the one proven on this same glider and MicroRider at
 `Taiwan/Taiwan17/gliders/doug/`; read that README and Taiwan13's husker

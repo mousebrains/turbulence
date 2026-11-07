@@ -3,9 +3,10 @@
 OSU's Rockland **VMP-250 SN 142** on R/V Roger Revelle cruise **RR1704**
 (project SK-II), Luzon Strait / northeastern South China Sea, **22–26 Feb
 2017**. 18 raw `.P` files; **12 are profiling casts → 100 profiles**,
-reprocessed with `microstructure-tpw` main `98b4206` on 2026-10-16. It replaces
-the 2026-09-15 set made on `7736082`; see
-[What changed](#what-changed-from-the-2026-09-15-set).
+reprocessed with `microstructure-tpw` main `8748b90` on 2026-11-05
+(`git v0.4.0-62-g8748b90253db`, stamped in every product). It replaces the
+2026-10-16 set made on `98b4206`, which replaced the 2026-09-15 set made on
+`7736082`; see [What changed](#what-changed-from-the-98b4206-set-2026-11-05).
 
 Reorganized 2026-09-15 — see `../README.md`, `../REORG_MANIFEST.csv` and
 `/Volumes/SeaChest/REORG_PLAN_Taiwan17.md` for the evidence behind every
@@ -66,11 +67,11 @@ The cast log's claims were each checked against the data.
 | | median | spread (MAD) | n |
 |---|---|---|---|
 | ε (paired) | 4.3e-9 W/kg | 0.92 dex | 18,271 |
-| χ | 1.4e-8 K²/s | 1.06 dex | 18,271 |
+| χ | 1.3e-8 K²/s | 1.08 dex | 18,271 |
 | N² (> 0 only) | 8.5e-5 s⁻² | 0.48 dex | 16,883 |
-| Γ | 0.163 | 0.41 dex | 14,542 |
+| Γ | 0.154 | 0.44 dex | 14,540 |
 | K_ρ | 9.1e-6 m²/s | 0.98 dex | 16,956 |
-| K_T | 6.0e-6 m²/s | 1.17 dex | 15,118 |
+| K_T | 5.8e-6 m²/s | 1.21 dex | 15,109 |
 
 Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
 holding a finite, positive value. **7.6% of bins have N² ≤ 0** under the
@@ -83,6 +84,16 @@ Water depth under the casts (ship multibeam, `../ship_data/met/met.mat` field
 `MB`) is **1,500–3,000 m**, shoaling toward the NE end of the line; casts reach
 ~120–220 m, so **every cast ends ≥ 1,150 m above the seafloor** — no bottom
 boundary layer and no bottom strikes. `bottom.enable` stays false.
+
+## What changed from the 98b4206 set (2026-11-05)
+
+The same 100 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (22,356 windows).
+- **χ ×0.98** (paired per-window median of `chiMean`, 5–95% 0.65–1.04; T1
+  ×0.98, T2 ×0.99); the combined `chiMean` median ×0.93, Γ 0.163 → 0.154.
+  The signature of #263 (χ no longer uses FFT bin 1, `chi.first_bin: 2`): on
+  Taiwan13's VMP, rerun on 8748b90 with `chi.first_bin: 1`, χ is
+  bit-identical to 98b4206's. Not rerun that way here.
 
 ## What changed from the 2026-09-15 set
 

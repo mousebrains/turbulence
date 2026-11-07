@@ -2,9 +2,10 @@
 
 **183 profiles from 13 deployments (D2–D14), no errors.** 2023-06-17 15:08 →
 06-24 13:55, 11.77–12.26 N / 66.58–67.80 E, casts to 263 m. **Reprocessed
-2026-10-17 on main 98b4206** (`microstructure-tpw 0.4.0 (git
-v0.4.0-29-g98b42062069c)`, stamped in every product); rebuilt and reorganized
-2026-09-20, when the earlier `Processed/` had been deleted.
+2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
+v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
+(2026-10-17); rebuilt and reorganized 2026-09-20, when the earlier
+`Processed/` had been deleted.
 
 **This is not our deployment** — everything below was measured from the files,
 not taken from a cruise document.
@@ -13,7 +14,7 @@ not taken from a cruise document.
 ASTRAL/2023/
   vmp/raw/                 13 astral_VMP_D*.p   (they used to sit in the analysis dir)
   vmp/analysis/            perturb.yaml, calibration/, sections.yaml, this README
-    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00 (2026-10-17)
+    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00 (2026-11-05)
   gps/                     gps.mat (v7.3 HDF5 table), gps.nc, make_gps.py
   FOREIGN_RR2202_met/      NOT ASTRAL -- see below
   REORG_MANIFEST.csv       every move of the 2026-09-20 reorganization
@@ -26,17 +27,27 @@ Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
 | | median | MAD | n |
 |---|---|---|---|
 | ε | 2.20e-9 W/kg | 0.34 | 23,443 |
-| χ | 6.92e-9 K²/s | 0.91 | 23,443 |
+| χ | 5.95e-9 K²/s | 0.93 | 23,442 |
 | N² (> 0) | 1.23e-4 s⁻² | 0.42 | 22,289 |
-| Γ | 0.060 | 0.57 | 20,088 |
+| Γ | 0.050 | 0.60 | 20,096 |
 | K_ρ | 3.87e-6 m²/s | 0.55 | 22,281 |
-| K_T | 8.9e-7 m²/s | 0.74 | 20,822 |
+| K_T | 7.5e-7 m²/s | 0.78 | 20,806 |
 
 N² ≤ 0 in 4.9% of bins: stratification is temperature-sorted (#219) and no
 longer forced positive; salinity scrambles the density order in 6 of 13 files
 (run notice). Γ and K_ρ are masked where N² < N2_min. The shallowest data sit
 at a median 12.5 m: the 2026-09-20 trim (fall-rate residual voter,
 `max_depth: 80`, no floor) is described in `perturb.yaml`.
+
+### What changed from the 98b4206 set (2026-11-05)
+
+The same 183 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (23,444 windows).
+- **χ ×0.90** (paired per-window median of `chiMean`, 5–95% 0.57–1.00; T1
+  ×0.89, T2 ×0.91); the combined `chiMean` median ×0.86, Γ 0.060 → 0.050,
+  K_T with χ. It is #263: χ no longer uses FFT bin 1 (`chi.first_bin: 2`).
+  A rerun on 8748b90 with `chi.first_bin: 1` restores the old χ to within
+  ±1.3%.
 
 ### What changed from the 2026-09-20 set
 

@@ -9,6 +9,16 @@ main 98b4206**
 (`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`, stamped in every
 product).
 
+> **2026-11-05: this 98b4206 set stays the product of record** (Pat). A full
+> reprocessing on `main` 8748b90 is kept beside it, NOT for use, as
+> `Processed_new_20261105_held/`. Since #245 chi's FP07 noise model uses the
+> in-situ fitted coefficients, and on this MR that lowers the model floor.
+> Measured over 60-100 Hz in each probe's quietest usable windows (95 files), the
+> observed floor is **T1 1.23x / T2 1.41x the new model but 1.01x / 1.12x this
+> set's** (healthy deployments read 1.00-1.21), so the new chi is biased high near
+> the floor (combined chiMean x1.44). The same pattern as Taiwan13 husker MR046,
+> smaller here. Tracking: https://github.com/mousebrains/turbulence/issues/273
+
 ## Verdict
 
 | | status |
@@ -154,6 +164,8 @@ Result: gliderflight 1.2.1, default lift and Cd1, mass 60 kg nominal.
    already on the MR clock.
 4. `perturb run -c perturb.yaml -j 4` (~10 min, run with
    `HDF5_USE_FILE_LOCKING=FALSE` on SeaChest).
+
+A rerun on current `main` reproduces the held 2026-11-05 noise model (issue #273), not this set.
 
 ## Untested, and worth doing
 

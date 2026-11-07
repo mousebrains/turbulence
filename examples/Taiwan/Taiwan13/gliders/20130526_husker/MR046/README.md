@@ -5,6 +5,18 @@ RR1306 leg 3, South China Sea. **495 profiles from 58 of 77 files**,
 2013-05-02 05:55Z – 05-26 07:32Z, reprocessed 2026-10-16 on `main` 98b4206.
 It replaces the 2026-09-15 set; see [What changed](#what-changed-from-the-2026-09-15-set).
 
+> **2026-11-05: this 98b4206 set stays the product of record.** A full
+> reprocessing on `main` 8748b90 is kept beside it on SeaChest, NOT for use,
+> as `Processed_new_20261105_held/`. Since #245, chi's FP07 noise model uses
+> the in-situ fitted coefficients, and on this MR that puts the model floor at
+> 0.47-0.57x the old one. Over 60-100 Hz in each probe's quietest usable
+> windows, the observed floor is **T1 2.25x the new model but 1.07x this
+> set's**. So the new chi is biased high near the floor (combined chiMean
+> x1.89). **T2 reads 2.23x even this set's model**, so T2 chi near its floor
+> is biased high here too. The fitted beta (T1 ~4560 K, T2 ~4270 K, against
+> FP07 beads' ~3000-3100 K) is most likely absorbing a first-stage gain error,
+> which leaves the old floor right (moderate confidence). Tracking: #273.
+
 | | |
 |---|---|
 | `DATA/` | The 77 original `.P` files (uppercase) + `046SETUP.CFG`, `CAL046.BAT`, `ODAS5IR.PXE`, `USBL.PXE`. Untouched. |
@@ -162,3 +174,6 @@ why this is documented rather than configured away.
 cd /Volumes/SeaChest/Taiwan/Taiwan13/gliders/20130526_husker/MR046
 perturb run -c perturb.yaml -j 8   # ~7 min; these files were made on main 98b4206
 ```
+
+A rerun on current `main` reproduces the held 2026-11-05 noise model (#273),
+not this set.

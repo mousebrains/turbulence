@@ -2,9 +2,10 @@
 
 Microstructure from the MicroRider carried by Slocum glider `doug` during
 R/V Roger Revelle cruise RR1704 (project SK-II), Luzon Strait. **530 profiles
-from 72 of 80 files**, 2017-02-19 – 02-28, reprocessed 2026-10-16 on `main`
-98b4206. It replaces the 2026-09-15 set; see
-[What changed](#what-changed-from-the-2026-09-15-set).
+from 72 of 80 files**, 2017-02-19 – 02-28, reprocessed 2026-11-05 on `main`
+8748b90 (`git v0.4.0-62-g8748b90253db`, stamped in every product). It
+replaces the 2026-10-16 set made on 98b4206, which replaced the 2026-09-15
+set; see [What changed](#what-changed-from-the-98b4206-set-2026-11-05).
 
 | | |
 |---|---|
@@ -46,16 +47,32 @@ from 72 of 80 files**, 2017-02-19 – 02-28, reprocessed 2026-10-16 on `main`
 | | median | spread (MAD) | n |
 |---|---|---|---|
 | ε (paired) | 2.3e-9 W/kg | 1.31 dex | 88,806 |
-| χ | 3.2e-9 K²/s | 1.22 dex | 87,878 |
+| χ | 3.1e-9 K²/s | 1.23 dex | 87,843 |
 | N² (> 0 only) | 8.7e-5 s⁻² | 0.55 dex | 75,929 |
-| Γ | 0.096 | 0.58 dex | 75,282 |
+| Γ | 0.093 | 0.57 dex | 77,061 |
 | K_ρ | 5.6e-6 m²/s | 1.48 dex | 79,224 |
-| K_T | 3.8e-6 m²/s | 1.74 dex | 85,214 |
+| K_T | 3.4e-6 m²/s | 1.73 dex | 86,913 |
 
 Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
 holding a finite, positive value. **14.5% of bins have N² ≤ 0** under the
 temperature sort, and the N² row leaves them out. Γ and K_ρ are masked per
 window where N² < N2_min and only then binned.
+
+## What changed from the 98b4206 set (2026-11-05)
+
+The same 530 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (155,616 windows).
+- **χ ×1.00** (paired per-window median of `chiMean`, 5–95% 0.67–1.32; T1
+  ×1.00, T2 ×1.00); the combined `chiMean` median ×0.98, Γ 0.096 → 0.093.
+  Two changes that nearly cancel, not separated: #263 (χ no longer uses FFT
+  bin 1) and #245 (the χ noise model now takes the in-situ fitted FP07
+  coefficients, which raises its floor ×1.04–1.10 here). #257 also refitted
+  two files' FP07 curves at order 1 (CAS_006, CAS_078; 2 of 72 fitted).
+- The new floor fits the data: over 60–100 Hz in each probe's quietest usable
+  windows, the observed floor is 1.13 (T1) and 0.97 (T2) of the model.
+  Healthy deployments read 1.00–1.21. Compare
+  `../../../Taiwan13/gliders/20130526_husker/MR046/`, where #245 put the
+  floor ~2× too low and the 98b4206 set stays the product of record.
 
 ## What changed from the 2026-09-15 set
 
@@ -127,5 +144,5 @@ and do not treat `epsilonMean` as calibrated.
 
 ```bash
 cd /Volumes/SeaChest/Taiwan/Taiwan17/gliders/doug
-perturb run -c perturb.yaml -j 8        # ~8 min; these files were made on main 98b4206
+perturb run -c perturb.yaml -j 8        # ~8 min; these files were made on main 8748b90
 ```

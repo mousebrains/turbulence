@@ -115,6 +115,22 @@ within-leg settling drift (~1°/100 s) looks like downstream.
 unrelated platforms. Worth a look. **Most of it was the density sort** (below):
 reprocessed, Γ here is 0.24.
 
+## Reprocessed 2026-11-05 on main 8748b90
+
+All three product sets were rebuilt with `microstructure-tpw 0.4.0 (git
+v0.4.0-62-g8748b90253db)`, stamped in every product. Same 199 profiles (and
+dat_0377's 2), same windows.
+
+- **ε, N² and dT/dz: bit-identical** (10,327 windows in each arm).
+- **χ: ×1.00** (paired per-window median of `chiMean`, 5–95% 0.99–1.05 in
+  both arms; 49% of windows bit-identical). The combined `chiMean` median is
+  ×1.01 (`em`) and ×1.00 (`flight`); Γ 0.241 and 0.218, unchanged. #245 is a
+  no-op here, because the FP07s carry no in-situ fit (noise model ×1.00). The
+  small change is most likely #263 (χ no longer uses FFT bin 1).
+- `dat_0377`: χ ×1.03 over its 40 windows, ε unchanged.
+- The observed 60–100 Hz floor in the quietest usable windows is 1.11 (T1)
+  and 1.15 (T2) of the model (healthy deployments 1.00–1.21).
+
 ## Reprocessed 2026-10-17 on main 98b4206
 
 All three product sets were rebuilt with `microstructure-tpw 0.4.0 (git

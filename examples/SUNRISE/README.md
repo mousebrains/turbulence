@@ -93,6 +93,52 @@ so one could charge), verified against SN 412's own working casts to within
   (SeaChest `Data/UNDERWAY_README.md`), and every 2021 profile now has a
   position.
 
+## Reprocessed 2026-11-05 on main 8748b90
+
+All 54 runs were rebuilt with `microstructure-tpw 0.4.0 (git
+v0.4.0-62-g8748b90253db)`, stamped in every product. The nine SN194 configs
+now divide T2005's slow response out of its spectra (#252, #254, #274).
+Against the 98b4206 set:
+
+* **ε, N² and dT/dz: bit-identical** in all 54 runs, over the same profiles and
+  windows. The only file errors are the two known ones (SR1P2_0011, SR1W_062).
+* **χ: #263 everywhere.** χ no longer uses FFT bin 1 (`chi.first_bin: 2`).
+  The change, predicted from the old stored spectra, matches the measured one
+  to 1–4%. Its size depends on the deployment: ×0.95–0.98 in 2021, ×0.80–0.89
+  in 2019 and 2022 on the Pelican, and ×0.69 on Point Sur SN194's T1, where
+  bin 1 held ~30% of the resolved variance. #245 (the noise model on the
+  fitted FP07 coefficients) moves χ by only ×0.996–1.013 here, because S/N
+  is high.
+* **T2005 (SN194 T2, 2021-06-29 → 2022-06-20 08:30Z) is corrected.** Measured
+  alone on four Walton Smith files (production against a rerun on the same
+  engine without `fp07_slow_response`), T2005's χ rises **×1.295** (5–95%
+  1.283–1.300, 8,964 windows), and `chi_1` and ε are bit-identical. Net of
+  #263, Walton Smith's T2 reads ×1.19 the 98b4206 set. 2021 Pelican files
+  before SR1P_518 carry T1593 on T2 and keep their χ.
+* **Point Sur SN194 excludes T2 from 2022-06-20 08:30Z**, where T2005's fast
+  response breaks down (68 files after it). 87% of its T2 windows are masked,
+  T1 carries `chiMean` there, and the old T2 read 1.17× T1. So the combined
+  `chiMean` falls ×0.55 (#263 and the exclusion together).
+* The per-file 0.25–2 Hz guard warns on SR1P_523 (−0.276 against a predicted
+  −0.159; known before this run) and SR1P_518 (−0.297 over 42 windows, near
+  its 40-window minimum; read as scatter, unverified).
+
+Top-down tree, every 5th profile file. Paired ratios are new/old, the median
+over windows present in both; the combined median and Γ are over each set's
+own bins of `chi_combo`:
+
+| deployment | χ T1 | χ T2 | `chiMean` | combined `chiMean` | Γ old → new |
+|---|---|---|---|---|---|
+| 2019 Pelican SN142 | 0.80 | 0.89 | 0.86 | 0.80 | 0.082 → 0.068 |
+| 2019 Pelican SN194 | 0.87 | 0.83 | 0.85 | 0.78 | 0.061 → 0.048 |
+| 2021 Pelican SN194 | 0.98 | 0.97 | 0.98 | 0.91 | 0.093 → 0.077 |
+| 2021 Pelican SN412 | 0.97 | 0.98 | 0.97 | 0.91 | 0.095 → 0.086 |
+| 2021 Walton Smith SN142 | 0.96 | 0.96 | 0.96 | 0.84 | 0.131 → 0.108 |
+| 2021 Walton Smith SN194 | 0.95 | 1.19 | 1.06 | 0.98 | 0.050 → 0.046 |
+| 2022 Pelican SN142 | 0.83 | 0.87 | 0.85 | 0.77 | 0.104 → 0.080 |
+| 2022 Pelican SN412 | 0.83 | 0.87 | 0.85 | 0.76 | 0.107 → 0.084 |
+| 2022 Point Sur SN194 | 0.69 | 0.95 (in span) | 0.58 | 0.55 | 0.043 → 0.028 |
+
 ## Reprocessed 2026-10-20 on main 98b4206
 
 All 54 runs were rebuilt with `microstructure-tpw 0.4.0 (git

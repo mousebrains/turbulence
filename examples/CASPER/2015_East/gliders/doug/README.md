@@ -3,9 +3,10 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during CASPER-East (R/V *Atlantic Explorer*), on the 50 m shelf off Duck,
 North Carolina. **4,653 profiles from 137 of 173 files**, 2015-10-12 13:13 →
-2015-11-05 18:22, 2.5–45.5 m. **Reprocessed 2026-10-17 on main 98b4206**
-(`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`, stamped in every
-product); first processed 2026-09-20.
+2015-11-05 18:22, 2.5–45.5 m. **Reprocessed 2026-11-03 on main 2aa9caf**
+(`microstructure-tpw 0.4.0 (git v0.4.0-61-g2aa9caf42eec)`, stamped in every
+product) for #257; before that 2026-10-17 on 98b4206 (that set, `Processed_prev_20261017/`,
+was deleted 2026-11-03); first processed 2026-09-20.
 
 Twin of `../../../../2017_West/gliders/20170929_doug_CASPER/analysis/` — same
 glider, same MicroRider, same recipe. Read that README too; this one records
@@ -27,9 +28,9 @@ Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
 
 | | median | MAD | n |
 |---|---|---|---|
-| χ (`chiMean`) | 1.0e-8 K²/s | 1.11 | 136,562 |
-| χ(T1) | 8.8e-9 | 1.12 | 133,185 |
-| χ(T2) | 1.1e-8 | 1.09 | 132,045 |
+| χ (`chiMean`) | 9.8e-9 K²/s | 1.09 | 135,905 |
+| χ(T1) | 8.9e-9 | 1.11 | 132,396 |
+| χ(T2) | 1.1e-8 | 1.07 | 131,241 |
 | N² (> 0) | 9.2e-5 s⁻² | 0.86 | 117,440 |
 | speed | 0.313 m/s | | 141,437 |
 | ~~ε (paired)~~ | ~~5.8e-8 W/kg~~ | 1.13 | 141,437 |
@@ -44,7 +45,8 @@ is expected for 50 m of tidally and wind-mixed water off the Outer Banks — but
 see the ε caveat before quoting that number.
 
 **The thermistors agree: χ(T1)/χ(T2) = 0.843, MAD 0.17 dex over 4,557
-profiles.** Both are healthy for the whole deployment by the relative test in
+profiles** (2026-10-17 products; about 1% lower after the 2026-11-03 rerun, see
+below). Both are healthy for the whole deployment by the relative test in
 `thermistor_health.csv` (T1_sd/T2_sd median 0.968, 5–95 %: 0.963–1.067; 138
 files ok, 33 bench/frozen, 2 briefly railed). That is the opposite of
 CASPER-West, where T1 died. χ here comes from a Method-2 spectral fit, which
@@ -155,6 +157,39 @@ record itself has 37 h / 17 h / 14 h gaps, so no speed exists), `CAS_066` (the
 glider sat on the surface — 0.43 dbar for a 49-minute record, against 33–39
 dbar either side), `CAS_170` (header dated 2016-08-08) and `DAT_001`–`003`
 (bench). All correct refusals.
+
+## What changed from the 2026-10-17 set (rerun 2026-11-03)
+
+Rerun for #257: perturb's per-file FP07 fit now refuses a curve no FP07 has.
+The same 4,653 profiles come from the same 137 files, and the 35 file errors
+are the same speed refusals.
+- **ε, N², dT/dz: bit-identical.**
+- **FP07 fits:** the configured order 2 failed the curvature bound ("curvature
+  no bead has") and was refitted at order 1 in 126 of 135 fitted T1 files and
+  128 of 137 T2 files (run notices). T1 in CAS_053/054 stays on factory
+  coefficients, as before.
+- **χ:** paired per window, T1 ×1.008 (5–95 %: 0.78–1.38), T2 ×1.009
+  (0.80–1.34), with no window identical. The spread is wider in the files refitted at
+  order 1 than in the rest, which kept order 2 or factory coefficients
+  (T1 0.78–1.39 against 0.88–1.15).
+  The table above is updated.
+  - #263 (χ no longer uses FFT bin 1) gives ×1.014, 5–95 % 0.97–1.12; it is
+    small at `fft_sec: 2.0`.
+  - #257's refits and #245 (the noise model on the fitted coefficients)
+    together give ×0.99, 0.92–1.10. That split comes from 6 files
+    (185 profiles) rerun with `chi.first_bin: 1`; #257 and #245 were not
+    separated from each other.
+  - χ(T1)/χ(T2) falls about 1%: 0.854 → 0.845 by the median over profiles
+    of each profile's median ratio. That statistic gives 0.854 rather than
+    0.843 on the 2026-10-17 set, so only the relative change is quoted.
+- **K_T, Γ:** where finite in both sets they are unchanged (paired cell median
+  1.001). But windows that pass the hard χ QC rose 6.4% (fallback windows
+  13,903 → 7,210 in half the files), and K_T and Γ are not computed on
+  fallback windows. So 4.5% more cells are finite (K_T 122,501 → 128,076),
+  mostly low ones, and the all-cell median falls (K_T 1.0e-4 → 8.5e-5,
+  Γ 0.036 → 0.035). #263's own validation on this glider (Taiwan 2017)
+  raised QC passes 5.6%. Both still inherit the ε problem.
+- Run log: `perturb_20261103.log`.
 
 ## What changed from the 2026-09-20 set
 

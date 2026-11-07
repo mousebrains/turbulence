@@ -6,9 +6,9 @@ The glider record runs 2017-07-24 → 08-30; the MicroRider record runs
 07-24 23:34 → 08-14 (158 files, 16.9 GB). The MR (SN 247, top-mounted)
 carried two shear probes, two FP07s and AEM1-G EM sensor 010. A 600 kHz RDI
 DVL looked down and recorded descents only, 07-24 → 07-31.
-**Reprocessed 2026-10-17 on main 98b4206** (`microstructure-tpw 0.4.0 (git
-v0.4.0-29-g98b42062069c)`, stamped in every product); first processed
-2026-10-13.
+**Reprocessed 2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
+v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
+(2026-10-17); first processed 2026-10-13.
 
 ## Verdict
 
@@ -87,21 +87,35 @@ spectral fit is good (median fom 0.91–0.99). Whether the bead's response
 
 | | |
 |---|---|
-| χ from T1 (`chi_1`) | 1.8e-10 K²/s (0.77 dex, 1,983) |
+| χ from T1 (`chi_1`) | 2.5e-10 K²/s (0.59 dex, 1,898) |
 | ε (paired) | 4.9e-11 W/kg (0.53, 2,183) |
 | N² (> 0) | 1.7e-5 s⁻² (0.42, 1,983) |
-| Γ | 0.33 (0.78, 1,094) |
-| K_T | 2.3e-6 m²/s (1.11, 1,298) |
+| Γ | 0.42 (0.73, 1,427) |
+| K_T | 2.6e-6 m²/s (1.11, 1,718) |
 
 **Use `chi_1`, not `chiMean`.** perturb has no per-thermistor exclusion, so χ
 is computed for the pinned T2 too. T2 returns χ in 0–48% of windows per
 profile, all poorly resolved (K_max/k_B 0.7–1.2), and 2–3× above T1 where both
-exist (the run flags `chi_1/chi_2` medians of 0.31 and 0.47). That spurious χ
-enters `chiMean` in 127 of 1,990 bins (6%), and Γ, K_T and K_ρ are computed
-from `chiMean`, so those 6% carry it too.
+exist (the 98b4206 run flagged `chi_1/chi_2` medians of 0.31 and 0.47). That
+spurious χ enters `chiMean` in 180 of 1,910 bins (9%; 127 of 1,990 on
+98b4206), and Γ, K_T and K_ρ are computed from `chiMean`, so those bins carry
+it too.
 
 ε here is near the shear-probe floor (above). A floor-limited ε reads high,
 which would bias Γ low (reasoning, not separately tested).
+
+## What changed from the 98b4206 set (2026-11-05)
+
+- `Processed/`: the same 345 profiles; **ε, N² and dT/dz bit-identical**
+  (398,170 windows), still no χ.
+- `Processed_chi_T1/`: ε bit-identical; **χ from T1 ×1.09** (paired
+  per-window median, 5–95% 0.83–3.96), the binned `chi_1` median ×1.38, Γ
+  0.33 → 0.42. Most of it is #245: T1's in-situ fit differs from its embedded
+  coefficients, and the noise model on the fitted ones sits ×0.82 the old one.
+  **Here that is a correction.** Over 60–100 Hz in T1's quietest usable
+  windows the observed floor is 0.87 of the new model and 0.71 of the old
+  (healthy deployments 1.00–1.21), so the old model sat too high. #263 (χ no
+  longer uses FFT bin 1) is in it too; not separated.
 
 ## What changed from the 2026-10-13 set
 
@@ -147,7 +161,7 @@ The same 345 profiles, 1-m bins.
    - Per-day dynamic C_D0: 0.188–0.198 over 22 days (median 0.192).
    - Modeled AOA: −4.8° on dives at −22.5° pitch, +3.9° on climbs.
 4. **`perturb run -c perturb.yaml -j 8`** (~8.5 min; these files were made on
-   main 98b4206).
+   main 8748b90).
 5. **`perturb run -c perturb_chi_T1.yaml -j 3`** → `Processed_chi_T1/` (~1.5 min).
 
 ## The speed is checked against the paper's DVL
