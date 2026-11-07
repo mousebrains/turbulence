@@ -7,6 +7,16 @@ in every product); first processed 2026-10-13. **Rerun 2026-10-19 on the same
 code** for one wrong position (below). The 2026-10-17 set and its inputs were
 deleted on 2026-10-19 (Pat) after the comparison below.
 
+> **2026-11-05: this 98b4206 set stays the product of record** (Pat). A full
+> reprocessing on `main` 8748b90 is kept beside it, NOT for use, as
+> `Processed_new_20261105_held/`. Since #245 chi's FP07 noise model uses the
+> in-situ fitted coefficients, and on this MR that lowers the model floor.
+> Measured over 60-100 Hz in each probe's quietest usable windows (33 files), the
+> observed floor is **T1 1.22x / T2 1.29x the new model but 1.03x / 1.10x this
+> set's** (healthy deployments read 1.00-1.21), so the new chi is biased high near
+> the floor (combined chiMean x1.33). The same pattern as Taiwan13 husker MR046,
+> smaller here. Tracking: https://github.com/mousebrains/turbulence/issues/273
+
 ## Verdict
 
 | | status |
@@ -189,6 +199,8 @@ Old generation `_01` against new `_00`, the same 33 profiles, 1-m bins.
    6.08e-10 Pa-1; per-day dynamic Cd0 0.231, 0.214.
 4. `perturb run -c perturb.yaml -j 8` (~1.5 min; these files were made on main
    98b4206; the 2026-10-19 rerun used `-j 4` with `HDF5_USE_FILE_LOCKING=FALSE`).
+
+A rerun on current `main` reproduces the held 2026-11-05 noise model (issue #273), not this set.
 
 ## The slow dives
 

@@ -28,6 +28,16 @@ the glider had written exact-zero positions at one surfacing, which put a
 profile 1,798 km off, and its `dinkum-flight.yaml` now floors positions at
 1 degree.
 
+All seven were reprocessed on main 8748b90 on 2026-11-05 (ε bit-identical
+everywhere). `20170620_sea025`, `20170724_unit095` (both trees) and
+`20220224_unit211` now carry that set, and their READMEs give what changed.
+**The three 2015 unit211 deployments stay on their 98b4206 set as the product
+of record.** Since #245, χ's noise model uses the in-situ fitted FP07
+coefficients. On SN 058 that puts the model floor below the floor actually
+observed over 60–100 Hz (×1.19–1.41 of the new model, ×1.00–1.15 of the old).
+The 8748b90 sets are held beside them on SeaChest as
+`Processed_new_20261105_held/`; see each README and #273.
+
 The steps are the same as for the CASPER and Taiwan gliders: decode the glider
 (`dinkum-hotel`, or `make_nav.py` for the SeaExplorer), solve the MicroRider
 clock against glider pressure (`mr_clock.py`), compute a flight-model speed on

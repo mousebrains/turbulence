@@ -3,9 +3,10 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during the CASPER-West field program (R/V *Sally Ride* **SR1715**), off Point
 Mugu / Santa Cruz Island, California. **1,416 profiles from 181 of 188 files**,
-2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m. **Reprocessed 2026-10-17 on
-main 98b4206** (`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`,
-stamped in every product); first processed 2026-09-20.
+2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m. **Reprocessed 2026-11-05 on
+main 8748b90** (`microstructure-tpw 0.4.0 (git v0.4.0-62-g8748b90253db)`,
+stamped in every product); before that on 98b4206 (2026-10-17); first
+processed 2026-09-20.
 
 Recipe copied from `Taiwan17/gliders/doug/` — the **same glider and the same
 MicroRider**, eight months earlier.
@@ -27,11 +28,11 @@ Median, MAD of log10 (×1.4826, dex), and n over finite positive bins:
 | | median | MAD | n |
 |---|---|---|---|
 | ε (paired) | 1.65e-9 W/kg | 1.34 | 246,946 |
-| χ (`chiMean`) | 4.3e-10 K²/s | 0.90 | 241,355 |
+| χ (`chiMean`) | 4.5e-10 K²/s | 0.85 | 237,806 |
 | N² (> 0) | 7.6e-5 s⁻² | 0.56 | 214,083 |
-| Γ | **0.025** | 0.99 | 190,203 |
+| Γ | **0.021** | 1.00 | 195,557 |
 | K_ρ | 4.4e-6 m²/s | 1.37 | 221,620 |
-| K_T | 4.6e-7 m²/s | 1.27 | 217,961 |
+| K_T | 5.0e-7 m²/s | 1.27 | 223,124 |
 
 N² ≤ 0 in 13.3% of bins: stratification is temperature-sorted (#219) and no
 longer forced positive. Γ and K_ρ are masked there.
@@ -40,7 +41,7 @@ Through-water speed 0.305 m/s (5–95%: 0.202–0.398). `qc_drop_epsilon` is
 0.0000 — nothing was dropped by the QC gate, which as at the VMP is a
 statement about the gate, not a clean bill of health.
 
-**Γ = 0.025 is low** — four times below Taiwan17 doug's 0.096 and well under
+**Γ = 0.021 is low** — four times below Taiwan17 doug's 0.093 and well under
 the canonical 0.2. Read it against the known χ-scale problem on FP07s
 (`fp07_tau_scale` was measured at 1.66× on ARCTERX), and against the
 thermistor disagreement below. It is not evidence about mixing efficiency
@@ -252,7 +253,9 @@ identical stratification:
 (2026-09-20 products. On the 98b4206 rerun, with N² over N² > 0 bins: Taiwan17
 doug χ 3.2e-9, Γ 0.096, N² 8.7e-5; CASPER-West doug 4.3e-10, 0.025, 7.6e-5;
 VMP 194 1.06e-8, 0.117, 1.12e-4. The VMP's χ median falls with its deeper
-trim, not with the code. The ordering and the conclusion are unchanged.)
+trim, not with the code. On the 8748b90 rerun: Taiwan17 doug χ 3.1e-9, Γ
+0.093; CASPER-West doug 4.5e-10, 0.021; VMP 194 9.1e-9, 0.102; N² unchanged.
+The ordering and the conclusion are unchanged.)
 
 **Reading (hypothesis, consistent with every measurement above):** the FP07
 beads on this deployment were **attenuating**, not merely slow. A fouled or
@@ -271,6 +274,20 @@ order of magnitude and must not be used as absolute values.** ε is unaffected
 (shear probes, agreeing to 6%, and the co-located ε test is consistent).
 Relative structure in χ — vertical and temporal patterns — is probably still
 informative, since the attenuation looks multiplicative, but that is untested.
+
+## What changed from the 98b4206 set (2026-11-05)
+
+The same 1,416 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (423,015 windows).
+- **χ ×1.01** (paired per-window median of `chiMean`, 5–95% 0.66–2.03; T1
+  ×1.00, T2 ×1.01); the combined `chiMean` median ×1.04. Two changes, not
+  separated: #263 (χ no longer uses FFT bin 1) and #245 (the noise model now
+  takes the in-situ fitted FP07 coefficients, which raises its floor
+  ×1.01–1.08 here). The observed 60–100 Hz floor in the quietest usable
+  windows is 0.98 (T1) and 0.92 (T2) of the new model.
+- **Γ's combined median falls 0.025 → 0.021** although the paired per-window
+  Γ is ×1.00 (5–95% 0.62–1.62). The binned set holds 2.8% more Γ bins
+  (190,203 → 195,557). Not investigated.
 
 ## What changed from the 2026-09-20 set
 

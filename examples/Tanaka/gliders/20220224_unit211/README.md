@@ -3,9 +3,9 @@
 T. Tanaka's 2022 glider deployment, west of Okinawa: 25.60-25.77 N,
 126.93-127.00 E, in water 2022-02-24 23:37 .. 02-27 22:48 UTC. Dives to about
 1000 m, then four 300-m dives at the end. The data arrived on 2026-10-18 (see
-"Intake 2026-10-18" in the SeaChest `Tanaka/README.md`). **First processed
-2026-10-19 (UTC) on main 98b4206** (`microstructure-tpw 0.4.0 (git v0.4.0-29-g98b42062069c)`, stamped in
-every product).
+"Intake 2026-10-18" in the SeaChest `Tanaka/README.md`). **Reprocessed
+2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git v0.4.0-62-g8748b90253db)`, stamped in
+every product); first processed 2026-10-19 (UTC) on main 98b4206.
 
 ## Verdict
 
@@ -15,7 +15,7 @@ every product).
 | epsilon | both probes alive, but **sh1 reads 0.40x sh2** where the signal dominates. A gain error of ~1.6x in one probe's sensitivity; which one is unresolved |
 | chi | FP07s fitted in situ per file in 21 files (46 of 54 profiles, all within 3 mK of the CTD); factory coefficients in 4 short shallow files (8 profiles, chi within ~1.5% (T1) / ~4% low (T2)). **T2 is the slower bead**: chi_1/chi_2 = 1.5 |
 | clock | solved, 20 of 29 files, 0.37 s RMS |
-| speed | flight model, default lift and Cd1. Dives and climbs agree in the same bins (epsilon 0.90, chi 1.00) |
+| speed | flight model, default lift and Cd1. Dives and climbs agree in the same bins (epsilon 0.90, chi 1.11) |
 
 ## Products -- `Processed/`, generation **_00**
 
@@ -26,23 +26,23 @@ MAD of log10 (dex) and n over finite positive bins:
 |---|---|---|---|
 | U (m/s) | 0.310 | 0.222 | 0.480 |
 | epsilon, W/kg | 6.7e-10 (1.23, 28,187) | 6.4e-10 (1.11, 14,415) | 7.2e-10 (1.38, 13,772) |
-| chi, K2/s | 2.3e-9 (1.21, 27,507) | 2.4e-9 (1.17, 13,879) | 2.3e-9 (1.26, 13,628) |
+| chi, K2/s | 2.5e-9 (1.19, 27,239) | 2.7e-9 (1.14, 13,615) | 2.3e-9 (1.26, 13,624) |
 | N2 (> 0), s-2 | 2.1e-5 (0.61, 24,171) | 2.1e-5 | 2.1e-5 |
-| Gamma | 0.39 (0.49, 23,322) | 0.43 | 0.36 |
+| Gamma | 0.39 (0.49, 23,265) | 0.45 | 0.35 |
 | K_rho, m2/s | 6.7e-6 (1.33, 25,446) | 7.1e-6 | 6.2e-6 |
-| K_T, m2/s | 3.4e-5 (1.57, 26,401) | 4.7e-5 | 2.5e-5 |
+| K_T, m2/s | 3.4e-5 (1.57, 26,363) | 5.1e-5 | 2.3e-5 |
 
 N2 <= 0 in 13.6% of bins (temperature sort, #219). Salinity scrambles the
 density order in 17 of 25 files (run notice). Gamma and K_rho are masked where
 N2 < N2_min.
 
 **The legs agree.** In the same 1-m bins (median over dive profiles / median
-over climb profiles, then the median over ~980 bins): epsilon 0.90, chi 1.00,
-Gamma 1.22, N2 1.03. The 2015-11-13 deployment of the same glider (another MR)
+over climb profiles, then the median over ~980 bins): epsilon 0.90, chi 1.11,
+Gamma 1.29, N2 1.03 (chi 1.00 and Gamma 1.22 on 98b4206). The 2015-11-13 deployment of the same glider (another MR)
 disagrees by 0.47 / 4.5 / 5.4 on the same comparison, and that is unexplained
 there.
 
-Window QC: the Lueck FM exceeds 1.15 on 24% (sh1) / 27% (sh2) of dive windows
+Window QC (98b4206, not rechecked): the Lueck FM exceeds 1.15 on 24% (sh1) / 27% (sh2) of dive windows
 and 31% / 15% of climb windows. chi K_max/kB medians are 2.5 / 3.9 on dives and
 1.4 / 1.6 on climbs; chiQCFallback is 3-4%.
 
@@ -194,6 +194,19 @@ diagnostic run; nothing was applied.
   - No product is affected: the first profile starts 02-25 00:32, and product
     latitudes span 25.60-25.77 N.
 
+## What changed from the 98b4206 set (2026-11-05)
+
+The same 54 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (55,163 windows).
+- **χ ×1.01** (paired per-window median of `chiMean`, 5–95% 0.82–1.33; T1
+  ×1.01, T2 ×1.00); the binned `chiMean` median ×1.05 (T2 ×1.10), Γ
+  unchanged at 0.39. Three changes, not separated: #263 (χ no longer uses
+  FFT bin 1), #245 (the noise model now takes the in-situ fitted FP07
+  coefficients: ×0.93 on T1, ×1.09 on T2), and #257 (two files' FP07 curves
+  refitted at order 1: 211_030, 211_042, of 21 fitted).
+- The observed 60–100 Hz floor in the quietest usable windows is 0.78–0.90 of
+  the new model.
+
 ## Recipe (run from this directory)
 
 1. `dinkum-hotel build -c dinkum-flight.yaml` -> `flight_inputs.nc`. The
@@ -206,7 +219,8 @@ diagnostic run; nothing was applied.
 4. `uv run make_flight_speed.py calibrate` then `run` -> `unit211_flight_hotel.nc`,
    already on the MR clock.
 5. `perturb run -c perturb.yaml -j 4` (~7 min, run with
-   `HDF5_USE_FILE_LOCKING=FALSE` on SeaChest).
+   `HDF5_USE_FILE_LOCKING=FALSE` on SeaChest). These files were made on main
+   8748b90.
 
 ## Untested, and worth doing
 

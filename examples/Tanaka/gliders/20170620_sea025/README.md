@@ -5,9 +5,10 @@ doi:10.1175/JTECH-D-21-0074.1). It flew mission 24 along the Kuroshio southeast
 of Japan, 2017-06-20 01:14 → 06-26 22:17 UTC, with dives to 700 m. It carried
 a Rockland MR-SE SN 240 in the nose: two shear probes, one FP07, RSI's JAC-CT,
 an AEM1-G EM sensor and an optode. A Nortek AD2CP looked up from the top.
-**Reprocessed 2026-10-17 on main 98b4206** (`microstructure-tpw 0.4.0 (git
-v0.4.0-29-g98b42062069c)`, stamped in every product); first processed
-2026-10-13 on branch `feat/rsijac-ct`, merged as b1270b5 (#213).
+**Reprocessed 2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
+v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
+(2026-10-17); first processed 2026-10-13 on branch `feat/rsijac-ct`, merged as
+b1270b5 (#213).
 
 ## Verdict
 
@@ -30,9 +31,9 @@ v0.4.0-29-g98b42062069c)`, stamped in every product); first processed
 | sh1 / sh2, paired | 0.67 (MAD 0.14 dex) | 0.91 (MAD 0.14 dex) |
 | FM > 1.15, sh1 / sh2 | 25% / 21% | 45% / 35% |
 
-1-m bins, median (MAD of log10, n): χ 2.3e-9 K²/s (1.37 dex, 82,239), N² (> 0)
-2.8e-5 s⁻² (0.58, 77,765), Γ 0.10 (0.69, 71,515), K_ρ 9.2e-6 m²/s (0.82,
-79,504), K_T 6.5e-6 m²/s (1.47, 76,273). N² ≤ 0 in 6.9% of bins: salinity from
+1-m bins, median (MAD of log10, n): χ 2.4e-9 K²/s (1.36 dex, 81,626), N² (> 0)
+2.8e-5 s⁻² (0.58, 77,765), Γ 0.10 (0.67, 73,142), K_ρ 9.2e-6 m²/s (0.82,
+79,504), K_T 6.4e-6 m²/s (1.46, 77,880). N² ≤ 0 in 6.9% of bins: salinity from
 the JAC-CT scrambles the density order in all 64 files (run notice), so
 stratification is temperature-sorted (#219). Γ and K_ρ are masked where
 N² < N2_min.
@@ -44,6 +45,18 @@ untested. Climbs also fail the FM shape test about twice as often as dives.
 Neither probe has a calibration sheet in `microstructure_sensors/`. The config
 header says RSI first wrote nominal values (2017-03-30), and it was patched
 2017-06-07, 06-27 and 2021-02-06. **Absolute ε is unverified.**
+
+## What changed from the 98b4206 set (2026-11-05)
+
+The same 143 profiles and windows:
+- **ε, N² and dT/dz: bit-identical** (127,192 windows).
+- **χ ×1.01** (paired per-window median, 5–95% 0.87–1.27); the combined
+  `chiMean` median ×1.05, Γ 0.100 → 0.102. #245 (the noise model now takes
+  the in-situ fitted FP07 coefficients) leaves the model floor unchanged
+  here (×1.00), so most of it is likely #263 (χ no longer uses FFT bin 1).
+  Not bisected.
+- The observed 60–100 Hz floor in the quietest usable windows is 0.87 of the
+  model (healthy deployments 1.00–1.21).
 
 ## What changed from the 2026-10-13 set
 
@@ -104,7 +117,7 @@ The same 143 profiles, 1-m bins.
    - Modeled AOA −6.8° on dives and +4.4° on climbs. The paper's ADCP means
      are −7.7° and +5.1°, over different selections.
 4. **`perturb run -c perturb.yaml -j 8`** (~4.5 min; these files were made on
-   main 98b4206).
+   main 8748b90).
 
 ## The EM sensor (`U_EMC`): not used
 
