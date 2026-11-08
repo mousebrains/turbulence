@@ -120,6 +120,12 @@ Against the 98b4206 set:
   response breaks down (68 files after it). 87% of its T2 windows are masked,
   T1 carries `chiMean` there, and the old T2 read 1.17× T1. So the combined
   `chiMean` falls ×0.55 (#263 and the exclusion together).
+  * Rerun without the exclusion, the engine change alone gives ×0.69, and the
+    exclusion ×0.80.
+  * The exclusion also takes the fallback share from 29% to 53%. All 42,805
+    windows that become fallback lie after the cut, and in every one only T2
+    had passed QC.
+  * The QC-pass median does not move (×1.01), and Γ goes 0.043 → 0.030 → 0.028.
 * The per-file 0.25–2 Hz guard warns on SR1P_523 (−0.276 against a predicted
   −0.159; known before this run) and SR1P_518 (−0.297 over 42 windows, near
   its 40-window minimum; read as scatter, unverified).
@@ -148,12 +154,18 @@ windows count as well as #263's (next section).
 Many 2021 files carry embedded FP07 coefficients that are not an FP07's. β₁
 falls outside 2723–3416 K in 10–34 files of each 2021 deployment, and in none
 of 2019 or 2022 except one 2022 Pelican SN412 file. Before #245 the chi noise
-model used them, and in those files it sat up to more than 1000× above the
-observed 60–100 Hz floor. In the seven such files checked, the floor in
-each file's quietest decile of windows read 0.000–0.86 of that model. On the
-fitted coefficients it reads 1.02–1.18 in five of them, against 1.00–1.21 on
-healthy deployments. In files with plausible embedded coefficients the two
-models agree (1.02–1.17). A noise model that high leaves some windows no χ at
+model used them, and in those files it sat far above the data.
+
+* In the seven such files checked, the observed level over 60–100 Hz, in each
+  file's quietest decile of windows, read 0.000–0.86 of that model. At
+  ~1.1 m/s that band still holds the tail of the turbulent signal, so these are
+  upper bounds.
+* Over 110–160 Hz, where the quiet windows hold no signal, T1 reads 1.0–1.1 of
+  the new model in all seven. T2 reads 1.1–1.3, except SR1W_051 (2.5) and
+  SR1W_068 (1.7), which carry SN142's T2 noise (below).
+* In files with plausible embedded coefficients the two models agree.
+
+A noise model that high leaves some windows no χ at
 all, and cuts `K_max` short in others, so resolved windows failed
 `K_max_ratio >= 0.5` and were marked `chiQCFallback`.
 
@@ -209,8 +221,43 @@ So the 98b4206 2021 products dropped resolved low-χ windows, and their QC
 flags were wrong. The 8748b90 set is the right one. Its lower medians are
 those windows coming back, not a fall in χ.
 
-Two of the seven files checked read above the healthy range even on the new
-model: SR1W_051 (1.27 T1, 1.53 T2) and SR1W_068 (1.8, 2.2). Not investigated.
+### SN142's T2 noise above 100 Hz, and the band a floor test needs
+
+A census of every SUNRISE `.p` file took the median observed/model over the
+quietest decile of each file's windows, frequency by frequency. It shows why
+SR1W_051 and SR1W_068 read high over 60–100 Hz.
+
+* **60–100 Hz holds signal on these casts.** In the quietest windows,
+  observed/model still falls from 5–60 at 30 Hz to 1.1–2.7 at 60 Hz. It
+  reaches ~1.0 only by 80–120 Hz. At 120 Hz SR1W_051's and SR1W_068's T1 read
+  1.00 and 1.03.
+* **Over 110–160 Hz the model fits, by instrument.**
+  * SN142: 0.9–1.2 on T1, in 2019, 2021 and 2022.
+  * SN412: about 1.2 (1.1–1.6) on both probes in every file of both years, so
+    the model sits ~20% low there.
+  * SN194: 0.8–0.9 on T1 at Point Sur.
+* **SN142's T2 carries broadband noise above ~100 Hz**, rising with
+  frequency into 150–250 Hz. T1 on the same instrument reads 1.0–1.1.
+  * In 2021 Walton Smith it is 2.5–18× the model in eight files (SR1W_033,
+    037, 038, 039, 049, 050, 051, 061), against 1.1–1.7 elsewhere.
+  * In 2022 Pelican it is 1.3–8.5× throughout.
+* **In 2021 it biases T2's χ near the floor.** Medians over files:
+
+  | windows | 8 noisy files | 33 clean files |
+  |---|---|---|
+  | low-χ (geometric mean < 1e-9) | χ₂/χ₁ ×1.73 | ×1.04 |
+  | all | ×1.12 | ×1.00 |
+
+  QC does not catch it: T2 passes in 0.41 of those files' windows, and T1 in
+  0.36.
+* **2022 Pelican shows no such low-χ bias.** Its χ₂/χ₁ rise over the
+  deployment is T1's documented degradation.
+
+This noise is not corrected in these products, and its cause (electronics,
+cable or probe) is not known. A noise model anchored to the observed floor
+(#273) would need a band above the signal at VMP speeds, such as 110–160 Hz.
+The 60–100 Hz used for the gliders sits well above the signal at ~0.4 m/s, but
+not at ~1.1 m/s.
 
 ## Reprocessed 2026-10-20 on main 98b4206
 
