@@ -107,8 +107,9 @@ Against the 98b4206 set:
   to 1–4%. Its size depends on the deployment: ×0.95–0.98 in 2021, ×0.80–0.89
   in 2019 and 2022 on the Pelican, and ×0.69 on Point Sur SN194's T1, where
   bin 1 held ~30% of the resolved variance. #245 (the noise model on the
-  fitted FP07 coefficients) moves χ by only ×0.996–1.013 here, because S/N
-  is high.
+  fitted FP07 coefficients) moves each probe's χ by only ×0.996–1.013 here.
+  In 2021 it does change which windows have a χ and which pass QC, and with
+  them every median and Γ: see "2021: #245 also corrects the QC flags" below.
 * **T2005 (SN194 T2, 2021-06-29 → 2022-06-20 08:30Z) is corrected.** Measured
   alone on four Walton Smith files (production against a rerun on the same
   engine without `fp07_slow_response`), T2005's χ rises **×1.295** (5–95%
@@ -138,6 +139,62 @@ own bins of `chi_combo`:
 | 2022 Pelican SN142 | 0.83 | 0.87 | 0.85 | 0.77 | 0.104 → 0.080 |
 | 2022 Pelican SN412 | 0.83 | 0.87 | 0.85 | 0.76 | 0.107 → 0.084 |
 | 2022 Point Sur SN194 | 0.69 | 0.95 (in span) | 0.58 | 0.55 | 0.043 → 0.028 |
+
+In 2021 the combined `chiMean` and Γ columns carry #245's change in which
+windows count as well as #263's (next section).
+
+### 2021: #245 also corrects the QC flags
+
+Most 2021 files carry embedded FP07 coefficients that are not an FP07's. β₁
+falls outside 2723–3416 K in 10–34 files of each 2021 deployment, and in none
+of 2019 or 2022 except one 2022 Pelican SN412 file. Before #245 the chi noise
+model used them, and in those files it sat up to more than 1000× above the
+observed 60–100 Hz floor. In the seven flip-heavy files checked, the floor in
+each file's quietest decile of windows read 0.000–0.86 of that model. On the
+fitted coefficients it reads 1.02–1.18 in five of them, against 1.00–1.21 on
+healthy deployments. In files with plausible embedded coefficients the two
+models agree (1.02–1.17). A noise model that high leaves some windows no χ at
+all, and cuts `K_max` short in others, so resolved windows failed
+`K_max_ratio >= 0.5` and were marked `chiQCFallback`.
+
+Measured on 2021 Walton Smith SN142 (no T2005), rerun on 98b4206 and on
+8748b90 with `chi.first_bin: 1` (#263 undone). The 98b4206 rerun reproduces
+the old products' campaign table row exactly. Medians over `chi_combo` bins:
+
+| run | χ T1 | χ T2 | combined `chiMean` | QC-pass `chiMean` | fallback | Γ |
+|---|---|---|---|---|---|---|
+| 98b4206 | 1.890e-08 | 1.832e-08 | 1.770e-08 | 9.163e-09 | 57.4% | 0.131 |
+| 8748b90, `first_bin: 1` | 1.641e-08 | 1.668e-08 | 1.657e-08 | 6.403e-09 | 50.7% | 0.123 |
+| 8748b90 | 1.471e-08 | 1.499e-08 | 1.485e-08 | 5.514e-09 | 50.7% | 0.108 |
+
+The observed spectra are identical between the engines. Only the noise model
+differs, by ×0.003–1.0 file by file. Paired window by window, the change is
+in WHICH windows count, never in a window's value:
+
+* **About 3–5% of windows gain a χ at all**: on 1 file in 4, T1 in 1,322 of
+  26,544 windows and T2 in 734, with none lost. Under the old model, noise
+  subtraction left them no signal. They are low-χ (median 4.5e-10 T1,
+  1.2e-09 T2).
+* **7,570 of 104,105 windows (7.3%) go from fallback to QC-pass**, and 11 the
+  other way. Every one flips on `K_max_ratio >= 0.5`: `K_max` rises ×1.6 and
+  `kB` is unchanged. They are low-χ too, median `chiMean` 8.3e-10 against
+  9.2e-09 for windows that pass in both runs. The flips sit in the files where
+  the noise model fell most.
+* **Where a window has a χ in both runs, nothing moves**: the paired medians
+  are ×1.0000 for per-probe χ and ×1.000 for `chiMean`.
+* **So every median moves, because the set does**: per-probe χ ×0.87 (T1) and
+  ×0.91 (T2), combined `chiMean` ×0.94, QC-pass `chiMean` ×0.70.
+* **Γ, K_T and K_ρ use only QC-pass windows**, so Γ moves with them: 0.131 →
+  0.123 from #245, then → 0.108 from #263.
+
+So the 98b4206 2021 products dropped resolved low-χ windows, and their QC
+flags were wrong. The 8748b90 set is the right one. Its lower medians are
+those windows coming back, not a fall in χ.
+
+Only Walton Smith SN142 is measured; for the other three 2021 deployments the
+same split is inferred from the same coefficient defect, not measured. Two of
+the seven files read above the healthy range even on the new model: SR1W_051
+(1.27 T1, 1.53 T2) and SR1W_068 (1.8, 2.2). Not investigated.
 
 ## Reprocessed 2026-10-20 on main 98b4206
 
