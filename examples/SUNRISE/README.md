@@ -265,8 +265,28 @@ SR1W_051 and SR1W_068 read high over 60–100 Hz.
 * **2022 Pelican shows no such low-χ bias.** Its χ₂/χ₁ rise over the
   deployment is T1's documented degradation.
 
-This noise is not corrected in these products, and its cause is not known
-(#277).
+**Since 2026-11-08, T2 is excluded in those eight files.** The three
+2021 Walton Smith SN142 recipes carry it as `instruments.SN142.exclude`, and
+the six trees were rerun on 8748b90. χ there is T1's. In the top-down tree,
+the bin medians move as follows:
+
+| | before | T2 excluded |
+|---|---|---|
+| combined `chiMean` | 1.485e-08 | 1.476e-08 (×0.99) |
+| QC-pass `chiMean` | 5.514e-09 | 5.616e-09 (×1.02) |
+| fallback | 50.7% | 51.3% |
+| Γ | 0.108 | 0.108 |
+| χ T2 (bins) | 1.499e-08 (105,934) | 1.225e-08 (86,204) |
+
+* **T2's own median falls ×0.82**, mostly because its bins in the eight
+  files are gone.
+* **The fallback share rises** because only T1 can pass QC in those files.
+* **The bbl and hab trees move alike:** ×0.99 combined, ×1.02-1.03 QC-pass,
+  +0.6-0.7 points of fallback, and Γ within ±0.001.
+* **The 2021 tables above predate the exclusion.**
+
+In 2022 Pelican this noise, though present in every file, is not corrected,
+because no χ bias is found there. Its cause is not known (#277).
 
 A noise model anchored to the observed floor (#273) needs a band above the
 signal and below where the model turns to ADC noise. On a 512 Hz VMP that is
