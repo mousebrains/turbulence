@@ -145,11 +145,11 @@ windows count as well as #263's (next section).
 
 ### 2021: #245 also corrects the QC flags
 
-Most 2021 files carry embedded FP07 coefficients that are not an FP07's. β₁
+Many 2021 files carry embedded FP07 coefficients that are not an FP07's. β₁
 falls outside 2723–3416 K in 10–34 files of each 2021 deployment, and in none
 of 2019 or 2022 except one 2022 Pelican SN412 file. Before #245 the chi noise
 model used them, and in those files it sat up to more than 1000× above the
-observed 60–100 Hz floor. In the seven flip-heavy files checked, the floor in
+observed 60–100 Hz floor. In the seven such files checked, the floor in
 each file's quietest decile of windows read 0.000–0.86 of that model. On the
 fitted coefficients it reads 1.02–1.18 in five of them, against 1.00–1.21 on
 healthy deployments. In files with plausible embedded coefficients the two
@@ -157,44 +157,60 @@ models agree (1.02–1.17). A noise model that high leaves some windows no χ at
 all, and cuts `K_max` short in others, so resolved windows failed
 `K_max_ratio >= 0.5` and were marked `chiQCFallback`.
 
-Measured on 2021 Walton Smith SN142 (no T2005), rerun on 98b4206 and on
-8748b90 with `chi.first_bin: 1` (#263 undone). The 98b4206 rerun reproduces
-the old products' campaign table row exactly. Medians over `chi_combo` bins:
+Measured on all four 2021 deployments. Each was rerun on 98b4206, and every
+rerun reproduces the old products' campaign table row exactly. Each was also
+rerun on 8748b90 with `chi.first_bin: 1` (#263 undone) and its pre-T2005
+config, which leaves #245 as the χ change from 98b4206. The last run of each is
+the production set, which adds #263 and, on SN194, T2005's correction. Medians
+over `chi_combo` bins:
 
-| run | χ T1 | χ T2 | combined `chiMean` | QC-pass `chiMean` | fallback | Γ |
-|---|---|---|---|---|---|---|
-| 98b4206 | 1.890e-08 | 1.832e-08 | 1.770e-08 | 9.163e-09 | 57.4% | 0.131 |
-| 8748b90, `first_bin: 1` | 1.641e-08 | 1.668e-08 | 1.657e-08 | 6.403e-09 | 50.7% | 0.123 |
-| 8748b90 | 1.471e-08 | 1.499e-08 | 1.485e-08 | 5.514e-09 | 50.7% | 0.108 |
+| deployment | run | χ T1 | χ T2 | combined `chiMean` | QC-pass `chiMean` | fallback | Γ |
+|---|---|---|---|---|---|---|---|
+| Pelican SN194 | 98b4206 | 3.103e-08 | 2.314e-08 | 2.696e-08 | 1.374e-08 | 59.3% | 0.093 |
+| Pelican SN194 | 8748b90 without #263, T2005 | 3.056e-08 | 2.222e-08 | 2.633e-08 | 9.307e-09 | 53.2% | 0.085 |
+| Pelican SN194 | 8748b90 | 2.813e-08 | 2.098e-08 | 2.463e-08 | 8.072e-09 | 53.2% | 0.077 |
+| Pelican SN412 | 98b4206 | 6.697e-09 | 7.610e-09 | 7.117e-09 | 4.699e-09 | 33.2% | 0.095 |
+| Pelican SN412 | 8748b90 without #263, T2005 | 6.642e-09 | 7.535e-09 | 7.103e-09 | 4.313e-09 | 30.3% | 0.094 |
+| Pelican SN412 | 8748b90 | 6.038e-09 | 6.904e-09 | 6.464e-09 | 3.840e-09 | 30.3% | 0.086 |
+| Walton Smith SN142 | 98b4206 | 1.890e-08 | 1.832e-08 | 1.770e-08 | 9.163e-09 | 57.4% | 0.131 |
+| Walton Smith SN142 | 8748b90 without #263, T2005 | 1.641e-08 | 1.668e-08 | 1.657e-08 | 6.403e-09 | 50.7% | 0.123 |
+| Walton Smith SN142 | 8748b90 | 1.471e-08 | 1.499e-08 | 1.485e-08 | 5.514e-09 | 50.7% | 0.108 |
+| Walton Smith SN194 | 98b4206 | 8.210e-09 | 5.072e-09 | 6.554e-09 | 5.083e-09 | 58.7% | 0.050 |
+| Walton Smith SN194 | 8748b90 without #263, T2005 | 8.206e-09 | 4.846e-09 | 6.446e-09 | 4.254e-09 | 46.9% | 0.046 |
+| Walton Smith SN194 | 8748b90 | 7.406e-09 | 5.419e-09 | 6.447e-09 | 4.058e-09 | 46.9% | 0.046 |
 
-The observed spectra are identical between the engines. Only the noise model
-differs, by ×0.003–1.0 file by file. Paired window by window, the change is
-in WHICH windows count, never in a window's value:
+The observed spectra are identical between the engines; only the noise model
+differs. Paired window by window between 98b4206 and the #245-only run, the
+change is in WHICH windows count, never in a window's value:
 
-* **About 3–5% of windows gain a χ at all**: on 1 file in 4, T1 in 1,322 of
-  26,544 windows and T2 in 734, with none lost. Under the old model, noise
-  subtraction left them no signal. They are low-χ (median 4.5e-10 T1,
-  1.2e-09 T2).
-* **7,570 of 104,105 windows (7.3%) go from fallback to QC-pass**, and 11 the
-  other way. Every one flips on `K_max_ratio >= 0.5`: `K_max` rises ×1.6 and
-  `kB` is unchanged. They are low-χ too, median `chiMean` 8.3e-10 against
-  9.2e-09 for windows that pass in both runs. The flips sit in the files where
-  the noise model fell most.
-* **Where a window has a χ in both runs, nothing moves**: the paired medians
-  are ×1.0000 for per-probe χ and ×1.000 for `chiMean`.
-* **So every median moves, because the set does**: per-probe χ ×0.87 (T1) and
-  ×0.91 (T2), combined `chiMean` ×0.94, QC-pass `chiMean` ×0.70.
-* **Γ, K_T and K_ρ use only QC-pass windows**, so Γ moves with them: 0.131 →
-  0.123 from #245, then → 0.108 from #263.
+* **Windows gain a χ**: 0.3–4.8% of windows on T1 and 0.3–2.7% on T2, with
+  almost none lost. Under the old model, noise subtraction left them no
+  signal. Most are low-χ (medians 6e-11 to 1.2e-09). On Walton Smith SN194's
+  T1, where the old model was more than 1000× too high in most files, they are
+  ordinary windows (median 1.5e-08).
+* **Windows go from fallback to QC-pass**: 2.9% on Pelican SN412, 6.2% on
+  Pelican SN194, 7.3% on Walton Smith SN142 and 12.1% on Walton Smith SN194,
+  with 1–196 going the other way.
+  * Before, only 0.0–0.3% of the flipped windows' probes passed
+    `K_max_ratio >= 0.5`; after, 65–92% do. `kB` is unchanged.
+  * They are low-χ windows: median `chiMean` 6.7e-10 to 2.6e-09, against
+    4.7e-09 to 1.4e-08 for windows that pass in both runs.
+* **Where a window has a χ in both runs, nothing moves**: the paired median
+  per-probe χ is ×1.0000–1.0003 in all four, and `chiMean` ×1.000.
+* **So the medians move because the set does.**
+  * The fallback share falls 3–12 points in the #245 step, and does not move
+    in the #263 step.
+  * The QC-pass median moves ×0.68–0.92, the combined `chiMean` ×0.94–1.00,
+    and per-probe χ ×0.87–1.00.
+* **Γ, K_T and K_ρ use only QC-pass windows**, so Γ moves with them: ×0.91–0.99
+  from #245, before the #263 step.
 
 So the 98b4206 2021 products dropped resolved low-χ windows, and their QC
 flags were wrong. The 8748b90 set is the right one. Its lower medians are
 those windows coming back, not a fall in χ.
 
-Only Walton Smith SN142 is measured; for the other three 2021 deployments the
-same split is inferred from the same coefficient defect, not measured. Two of
-the seven files read above the healthy range even on the new model: SR1W_051
-(1.27 T1, 1.53 T2) and SR1W_068 (1.8, 2.2). Not investigated.
+Two of the seven files checked read above the healthy range even on the new
+model: SR1W_051 (1.27 T1, 1.53 T2) and SR1W_068 (1.8, 2.2). Not investigated.
 
 ## Reprocessed 2026-10-20 on main 98b4206
 
