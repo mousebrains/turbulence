@@ -9,7 +9,13 @@ import netCDF4
 import numpy as np
 import pytest
 
-from odas_tpw.rsi.profile import _extract_one, _load_from_nc, _load_source, extract_profiles
+from odas_tpw.rsi.profile import (
+    _extract_one,
+    _load_from_nc,
+    _load_source,
+    _storage_dtype,
+    extract_profiles,
+)
 
 
 def _write_nc(
@@ -532,3 +538,36 @@ class TestLoadFromNcClosesOnError:
 
         assert opened, "expected the Dataset to have been opened"
         assert not opened[-1].isopen(), "Dataset handle leaked on error path"
+
+
+# ---------------------------------------------------------------------------
+# Storage type of each channel (#278)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "dim", "sensor_type", "dtype"),
+    [
+        ("T1_dT1", "time_fast", "therm", "f8"),
+        ("T2", "time_fast", "therm", "f8"),
+        ("T1", "time_slow", "therm", "f4"),  # the L1 writer's TEMP is fast-only too
+        ("sh1", "time_fast", "shear", "f4"),
+        ("Ax", "time_fast", "piezo", "f4"),
+        ("P_dP", "time_fast", "poly", "f4"),
+        ("JAC_T", "time_slow", "jac_t", "f4"),
+        ("T1", "time_fast", "poly", "f4"),  # a stated type wins over the name
+        ("T1_dT1", "time_fast", "thermistor", "f8"),  # the alias fp07_cal accepts
+        ("T1_dT1", "time_fast", " Therm ", "f8"),
+        # No sensor_type, or an empty one (an external NetCDF source): judged
+        # by the names chi reads.
+        ("T1_dT1", "time_fast", "", "f8"),
+        ("sh1", "time_fast", "", "f4"),
+        ("T1_dT1", "time_fast", None, "f8"),
+        ("T3", "time_fast", None, "f8"),
+        ("T", "time_fast", None, "f4"),
+        ("sh1", "time_fast", None, "f4"),
+        ("T1", "time_slow", None, "f4"),
+    ],
+)
+def test_storage_dtype(name, dim, sensor_type, dtype):
+    assert _storage_dtype(name, dim, sensor_type) == dtype

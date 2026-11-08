@@ -195,6 +195,40 @@ class TestRoundTrip:
         assert dn["channel_types"] == dp["channel_types"] == {"Ax": "piezo", "Ay": "piezo"}
 
 
+class TestStorageTypes:
+    """The fast FP07 channels are float64 and exact; every other channel float32 (#278).
+
+    A float32 temperature near 25 C has a step of 1.9e-6 C, whose differentiated
+    rounding noise outgrew the electronics noise above ~160 Hz in every chi
+    spectrum computed from a per-profile file."""
+
+    def test_fast_fp07_channels_hold_the_pfiles_float64_values(self, case):
+        pf = case.pf
+        fp07 = [n for n in pf.channels if pf.is_fast(n) and pf.channel_info[n]["type"] == "therm"]
+        assert {"T1_dT1", "T2_dT2"} <= set(fp07)
+        for path in case.from_p:
+            with netCDF4.Dataset(str(path)) as ds:
+                t = ds.variables["t_fast"][:]
+                start = int(np.searchsorted(pf.t_fast, t[0]))
+                assert pf.t_fast[start] == t[0]
+                for name in fp07:
+                    var = ds.variables[name]
+                    assert var.dtype == np.float64, name
+                    expect = pf.channels[name][start : start + t.size]
+                    assert _same(np.ma.filled(var[:], np.nan), expect), name
+
+    def test_every_other_channel_stays_float32(self, case):
+        pf = case.pf
+        others = [
+            n for n in pf.channels if not (pf.is_fast(n) and pf.channel_info[n]["type"] == "therm")
+        ]
+        assert {"sh1", "P", "T1"} <= set(others)  # T1 is a slow channel here
+        for path in (*case.from_p, *case.from_nc):
+            with netCDF4.Dataset(str(path)) as ds:
+                for name in others:
+                    assert ds.variables[name.replace(" ", "_")].dtype == np.float32, name
+
+
 class TestInverse:
     """:func:`l1_native_channels` against the PFile the L1 file came from."""
 
@@ -233,7 +267,8 @@ class TestInverse:
                 np.testing.assert_allclose(data, pf.channels[name], rtol=4e-16, atol=0)
                 assert _same(data.astype(np.float32), pf.channels[name].astype(np.float32))
             elif name in supplementary:
-                # p_to_L1 stores these as float32, as every profile file does.
+                # p_to_L1 stores these as float32, as a profile file stores
+                # every channel but the fast FP07 ones (#278).
                 assert _same(data, pf.channels[name].astype(np.float32)), name
             else:
                 assert _same(data, pf.channels[name]), name

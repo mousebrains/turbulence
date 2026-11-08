@@ -38,6 +38,40 @@ _GRID_SNAP_TOL_S = 1e-6
 # dropped rather than detected over fabricated pressure (audit / PR #79).
 _MAX_REPAIR_GAP_S = 1.0
 
+# Sensor types whose FAST channels a per-profile file stores as float64; every
+# other channel is float32 (issue #278). A float32 FP07 temperature near 25 C
+# has a step of 1.9e-6 C. Differentiated, that white rounding noise rises as
+# f^2 and passed the anti-aliased electronics noise above ~160 Hz in every chi
+# spectrum computed from these files (55-79x the noise model at 240-250 Hz on a
+# 512 Hz VMP), while chi straight from the .p, in float64, read 0.7-1.0. The
+# L1 writer stores the same channels (fast "therm", its TEMP) as float64, so a
+# profile cut from an L1 file stays bit-identical to one cut from the .p.
+# Elsewhere float32 is harmless: shear's rounding noise is <= ~1e-13 of its
+# spectrum, and the piezo accelerometers are integer counts.
+# "thermistor" is the alias the FP07 calibrations accept too (perturb/fp07_cal.py,
+# fp07cal/series.py).
+_FLOAT64_SENSOR_TYPES = frozenset({"therm", "thermistor"})
+
+
+def _storage_dtype(ch_name: str, dim: str, sensor_type: object) -> str:
+    """NetCDF type of a channel in a per-profile file: "f8" or "f4" (#278).
+
+    A channel without a ``sensor_type``, or with an empty one (an external
+    NetCDF source; helpers.load_channels reads "" the same way), is judged by
+    name instead: the FP07 channels chi reads, ``T<n>`` and ``T<n>_dT<n>``.
+    """
+    if dim != "time_fast":
+        return "f4"
+    stype = "" if sensor_type is None else str(sensor_type).strip().lower()
+    if not stype:
+        from odas_tpw.rsi.helpers import DT_PATTERN, T_PATTERN
+
+        is_fp07 = bool(T_PATTERN.match(ch_name) or DT_PATTERN.match(ch_name))
+    else:
+        is_fp07 = stype in _FLOAT64_SENSOR_TYPES
+    return "f8" if is_fp07 else "f4"
+
+
 # Backward-compatible alias (previously underscore-prefixed)
 _smooth_fall_rate = smooth_fall_rate
 
@@ -370,8 +404,9 @@ def extract_profiles(
         for ch_name, ch_data, dim, attrs in data["channels"]:
             trimmed = ch_data[s_fast:e_fast] if dim == "time_fast" else ch_data[s_slow:s_slow_end]
             var_name = ch_name.replace(" ", "_")
-            var = ds.createVariable(var_name, "f4", (dim,), zlib=True)
-            var[:] = trimmed.astype(np.float32)
+            dtype = _storage_dtype(var_name, dim, attrs.get("sensor_type"))
+            var = ds.createVariable(var_name, dtype, (dim,), zlib=True)
+            var[:] = np.asarray(trimmed, dtype=np.float64 if dtype == "f8" else np.float32)
             schema_entry = COMBO_SCHEMA.get(var_name, {})
             for k, v in attrs.items():
                 # netCDF4 forbids setting these reserved attrs after creation
