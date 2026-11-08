@@ -160,8 +160,8 @@ model used them, and in those files it sat far above the data.
   file's quietest decile of windows, read 0.000–0.86 of that model. At
   ~1.1 m/s that band still holds the tail of the turbulent signal, so these are
   upper bounds.
-* Over 110–160 Hz, where the quiet windows hold no signal, T1 reads 1.0–1.1 of
-  the new model in all seven. T2 reads 1.1–1.3, except SR1W_051 (2.5) and
+* Over 110–160 Hz, where the quiet windows hold little signal, T1 reads 1.0–1.1
+  of the new model in all seven. T2 reads 1.1–1.3, except SR1W_051 (2.5) and
   SR1W_068 (1.7), which carry SN142's T2 noise (below).
 * In files with plausible embedded coefficients the two models agree.
 
@@ -234,13 +234,24 @@ SR1W_051 and SR1W_068 read high over 60–100 Hz.
 * **Over 110–160 Hz the model fits, by instrument.**
   * SN142: 0.9–1.2 on T1, in 2019, 2021 and 2022.
   * SN412: about 1.2 (1.1–1.6) on both probes in every file of both years, so
-    the model sits ~20% low there.
+    the model sits ~20–25% low there.
   * SN194: 0.8–0.9 on T1 at Point Sur.
-* **SN142's T2 carries broadband noise above ~100 Hz**, rising with
-  frequency into 150–250 Hz. T1 on the same instrument reads 1.0–1.1.
-  * In 2021 Walton Smith it is 2.5–18× the model in eight files (SR1W_033,
-    037, 038, 039, 049, 050, 051, 061), against 1.1–1.7 elsewhere.
-  * In 2022 Pelican it is 1.3–8.5× throughout.
+* **Even that band holds some signal here.** Almost no window on these casts
+  has a Batchelor cutoff `kB·W` below 70 Hz: 0–66 per deployment. The
+  medians are 116–172 Hz. Binned by cutoff, the 110–160 Hz ratio levels off
+  below ~110 Hz at SN142 T1 0.95–1.13, SN194 T1 0.88 and SN412 1.23–1.29.
+* **SN142's T2 carries broadband noise**, which T1 on the same instrument
+  does not. The excess, as T2/T1 in quiet windows:
+  * **2021 Walton Smith:** 2.5–18× the model in eight files (SR1W_033, 037,
+    038, 039, 049, 050, 051, 061), against 1.1–1.7 elsewhere. In those files
+    T2 is ~2× T1 from 40 Hz up, inside the χ band.
+  * **2022 Pelican:** 1.3–8.5× in every file, but only above ~120 Hz (×1.3
+    at 110–130 Hz, ×4 at 130–160 Hz).
+  * **It follows SN142's T2 channel, not the bead** (#277). Its two beads,
+    T1383 (2021) and T2133 (2022), read normally on SN194 and SN412. It
+    began after SN142's FP07 board constants changed (2019–2021), and it is
+    not a step at the CF2 → RDL upgrade (2021–2022): it is absent in 2025 on
+    the same RDL.
 * **In 2021 it biases T2's χ near the floor.** Medians over files:
 
   | windows | 8 noisy files | 33 clean files |
@@ -253,11 +264,14 @@ SR1W_051 and SR1W_068 read high over 60–100 Hz.
 * **2022 Pelican shows no such low-χ bias.** Its χ₂/χ₁ rise over the
   deployment is T1's documented degradation.
 
-This noise is not corrected in these products, and its cause (electronics,
-cable or probe) is not known. A noise model anchored to the observed floor
-(#273) would need a band above the signal at VMP speeds, such as 110–160 Hz.
-The 60–100 Hz used for the gliders sits well above the signal at ~0.4 m/s, but
-not at ~1.1 m/s.
+This noise is not corrected in these products, and its cause is not known
+(#277).
+
+A noise model anchored to the observed floor (#273) needs a band above the
+signal and below where the model turns to ADC noise. On a 512 Hz VMP that is
+~100–130 Hz, in windows whose Batchelor cutoff lies well below it. The
+60–100 Hz used for the gliders sits well above the signal at ~0.4 m/s, but
+not at ~1.1 m/s. The measurement is on #273.
 
 ## Reprocessed 2026-10-20 on main 98b4206
 
