@@ -278,9 +278,16 @@ the bin medians move as follows:
 | Γ | 0.108 | 0.108 |
 | χ T2 (bins) | 1.499e-08 (105,934) | 1.225e-08 (86,204) |
 
-* **T2's own median falls ×0.82**, mostly because its bins in the eight
-  files are gone.
+* **T2's own median falls ×0.82 because the set changed, not because χ was
+  corrected.** The eight files hold 1,520 of 8,183 profiles and 19,730 of
+  105,936 T2 bins. They sampled more energetic water: T1 reads 3.20e-08
+  there, 2.7× the 1.20e-08 elsewhere. Within those files the median
+  `chiMean` moves ×0.97.
 * **The fallback share rises** because only T1 can pass QC in those files.
+  669 bins (0.6%) go from QC-pass to fallback, all inside the eight files,
+  where only T2 had passed. Outside them no flag and no `chiMean` changes.
+  The flipped bins are low-χ (median `chiMean` 1.4e-09, against 5.5e-09 for
+  the QC-pass set), which is why the QC-pass median rises.
 * **The bbl and hab trees move alike:** ×0.99 combined, ×1.02-1.03 QC-pass,
   +0.6-0.7 points of fallback, and Γ within ±0.001.
 * **The 2021 tables above predate the exclusion.**
