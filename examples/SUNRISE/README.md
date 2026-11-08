@@ -241,12 +241,13 @@ SR1W_051 and SR1W_068 read high over 60–100 Hz.
   medians are 116–172 Hz. Binned by cutoff, the 110–160 Hz ratio levels off
   below ~110 Hz at SN142 T1 0.95–1.13, SN194 T1 0.88 and SN412 1.23–1.29.
 * **SN142's T2 carries broadband noise**, which T1 on the same instrument
-  does not. The excess, as T2/T1 in quiet windows:
-  * **2021 Walton Smith:** 2.5–18× the model in eight files (SR1W_033, 037,
-    038, 039, 049, 050, 051, 061), against 1.1–1.7 elsewhere. In those files
-    T2 is ~2× T1 from 40 Hz up, inside the χ band.
-  * **2022 Pelican:** 1.3–8.5× in every file, but only above ~120 Hz (×1.3
-    at 110–130 Hz, ×4 at 130–160 Hz).
+  does not.
+  * **2021 Walton Smith:** T2 reads 2.5–18× the model over 110–160 Hz in
+    eight files (SR1W_033, 037, 038, 039, 049, 050, 051, 061), against
+    1.1–1.7 elsewhere. In those files T2 is ~2× T1 from 40 Hz up, inside the
+    χ band.
+  * **2022 Pelican:** T2 reads 1.3–8.5× the model in every file. It departs
+    from T1 only above ~120 Hz, by ×1.3 at 110–130 Hz and ×4 at 130–160 Hz.
   * **It follows SN142's T2 channel, not the bead** (#277). Its two beads,
     T1383 (2021) and T2133 (2022), read normally on SN194 and SN412. It
     began after SN142's FP07 board constants changed (2019–2021), and it is
