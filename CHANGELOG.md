@@ -388,6 +388,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   warns).
 
 ### Fixed
+- **Per-profile NetCDFs store the fast FP07 channels as float64 (issue
+  #278).** `extract_profiles` (perturb's `profiles_NN/`, `rsi-tpw prof`) wrote
+  every channel as float32.
+  - **Why it mattered:** a float32 temperature near 25 C has a step of
+    1.9e-6 C. Differentiated, that white rounding noise rises as f^2.
+  - **The symptom:** every chi spectrum computed from these files climbed
+    above ~160 Hz, to 67-79x the noise model at 240-250 Hz. Chi from the `.p`
+    stayed at 0.7-1.0 there.
+  - **The rule:** fast channels of sensor type `therm` (or its alias
+    `thermistor`, in any case; without a `sensor_type`, or with an empty one,
+    the names `T<n>` and `T<n>_dT<n>`) are now float64.
+    Every other channel stays float32, where it is harmless (shear's rounding
+    noise is <= ~1e-13 of its spectrum, and the piezos are integer counts).
+    The L1 writer's `TEMP` already holds the same channels as float64, so
+    profiles cut from an L1 file stay bit-identical to profiles cut from the
+    `.p`.
+  - **Measured on Taiwan 2017 `DAT_160` and ARCTERX 2025
+    `AIOP2_VMP194_0006`** (rsi-tpw `prof` then `chi`, 2,351 windows): the
+    stored spectra now equal the `.p` route's in every band. Chi's paired
+    median ratio is 1.00000 (5-95% within +-0.1%). 73 near-floor windows in
+    ~29 C water (3.1%; median chi 2e-10) move by more than 1%, and 5 by more
+    than 5% (at most x1.19).
+  - **Cost:** the per-profile files grow x1.48 (50.4 -> 74.4 MB for those
+    two `.p` files).
+  - Existing products are not rebuilt. Like any source change, this one
+    changes perturb's engine fingerprint, so a rerun writes new stage
+    directories rather than reusing the float32 ones.
 - **The chi noise model now uses the FP07 coefficients the data were
   converted with, and inverts a fitted curve exactly (issue #245).** Under
   perturb's `fp07.calibrate: true` the channel data were on the per-file
