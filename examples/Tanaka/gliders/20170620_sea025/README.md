@@ -5,10 +5,10 @@ doi:10.1175/JTECH-D-21-0074.1). It flew mission 24 along the Kuroshio southeast
 of Japan, 2017-06-20 01:14 → 06-26 22:17 UTC, with dives to 700 m. It carried
 a Rockland MR-SE SN 240 in the nose: two shear probes, one FP07, RSI's JAC-CT,
 an AEM1-G EM sensor and an optode. A Nortek AD2CP looked up from the top.
-**Reprocessed 2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
-v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
-(2026-10-17); first processed 2026-10-13 on branch `feat/rsijac-ct`, merged as
-b1270b5 (#213).
+**Rebuilt 2026-11-08 on main 92938ae** (`microstructure-tpw 0.4.0 (git
+v0.4.0-66-g92938ae9b492)`, stamped in every product); before that on 8748b90
+(2026-11-05) and 98b4206 (2026-10-17); first processed 2026-10-13 on branch
+`feat/rsijac-ct`, merged as b1270b5 (#213).
 
 ## Verdict
 
@@ -45,6 +45,20 @@ untested. Climbs also fail the FM shape test about twice as often as dives.
 Neither probe has a calibration sheet in `microstructure_sensors/`. The config
 header says RSI first wrote nominal values (2017-03-30), and it was patched
 2017-06-07, 06-27 and 2021-02-06. **Absolute ε is unverified.**
+
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. The same 143
+profiles. Paired per window, the 8748b90 tree against the rebuild, every
+window:
+- **ε, N², dT/dz and K_ρ: identical** (127,192 windows).
+- **χ:** 5–95% 0.9978–1.0015; 3.6% of windows move by more than 1%, 0.59% by
+  more than 5%. With one FP07, `chiMean` is T1's χ, so the extremes, ×0.09
+  and ×14, are that bead's own fits moving, not selection flips (not
+  investigated). The combined `chiMean` median is ×1.000, and the medians
+  quoted above are unchanged at the digits shown.
 
 ## What changed from the 98b4206 set (2026-11-05)
 
@@ -117,7 +131,7 @@ The same 143 profiles, 1-m bins.
    - Modeled AOA −6.8° on dives and +4.4° on climbs. The paper's ADCP means
      are −7.7° and +5.1°, over different selections.
 4. **`perturb run -c perturb.yaml -j 8`** (~4.5 min; these files were made on
-   main 8748b90).
+   main 92938ae).
 
 ## The EM sensor (`U_EMC`): not used
 

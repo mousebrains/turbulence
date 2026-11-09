@@ -3,10 +3,10 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during the CASPER-West field program (R/V *Sally Ride* **SR1715**), off Point
 Mugu / Santa Cruz Island, California. **1,416 profiles from 181 of 188 files**,
-2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m. **Reprocessed 2026-11-05 on
-main 8748b90** (`microstructure-tpw 0.4.0 (git v0.4.0-62-g8748b90253db)`,
-stamped in every product); before that on 98b4206 (2026-10-17); first
-processed 2026-09-20.
+2017-09-29 18:34 → 2017-10-23 15:43, 2.5–192.5 m. **Rebuilt 2026-11-08 on
+main 92938ae** (`microstructure-tpw 0.4.0 (git v0.4.0-66-g92938ae9b492)`,
+stamped in every product); before that on 8748b90 (2026-11-05) and 98b4206
+(2026-10-17); first processed 2026-09-20.
 
 Recipe copied from `Taiwan17/gliders/doug/` — the **same glider and the same
 MicroRider**, eight months earlier.
@@ -274,6 +274,21 @@ order of magnitude and must not be used as absolute values.** ε is unaffected
 (shear probes, agreeing to 6%, and the co-located ε test is consistent).
 Relative structure in χ — vertical and temporal patterns — is probably still
 informative, since the attenuation looks multiplicative, but that is untested.
+
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. The same 1,416
+profiles and 7 file errors. Paired per window, the 8748b90 tree against the
+rebuild, every window:
+- **ε, N², dT/dz and K_ρ: identical** (423,015 windows).
+- **χ:** `chiMean` 5–95% 0.996–1.003; 5.2% of windows move by more than 1%,
+  1.6% by more than 5%. A single probe moves ×0.04–×64 at the extremes (T2;
+  T1 ×0.31–×4.5); `chiMean`'s extremes, below ×0.001 and ×9,089, lie outside
+  that, so they are QC selection flips (`chiMean` changed which probes it
+  combines). The combined `chiMean` median is ×1.000, and the table's medians
+  are unchanged at the digits shown.
 
 ## What changed from the 98b4206 set (2026-11-05)
 

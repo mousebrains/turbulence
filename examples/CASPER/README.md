@@ -16,7 +16,10 @@ glider `doug`, both times.
 
 All three were reprocessed on main 98b4206 on 2026-10-17. CASPER-East doug was
 rerun on 2aa9caf on 2026-11-03 (#257), and CASPER-West doug and the VMP on
-8748b90 on 2026-11-05; each glider README says what changed. The VMP's
+8748b90 on 2026-11-05. All three were rebuilt on main 92938ae on 2026-11-08
+(`git v0.4.0-66-g92938ae9b492`, stamped in every product) for #278: the
+per-profile files now store the fast FP07 channels as float64, not float32.
+Each glider README says what changed. The VMP's
 SeaChest config had been truncated on 2026-09-21 and is restored from
 `2017_West/vmp/perturb.yaml` (see its header).
 
@@ -25,6 +28,13 @@ bit-identical (115,534 windows); χ ×0.91 (paired per-window median of
 `chiMean`, 5–95% 0.59–1.00), the combined `chiMean` median ×0.86
 (1.06e-8 → 9.1e-9 K²/s), Γ 0.117 → 0.102. It is #263 (χ no longer uses FFT
 bin 1): a rerun with `chi.first_bin: 1` restores the old χ to within ±1%.
+
+The VMP, 92938ae against 8748b90, paired over every window: ε, N², dT/dz
+and K_ρ identical; `chiMean` 5–95% 0.9999–1.0001, 0.42% of windows move by
+more than 1%. The extremes, ×0.51 and ×2.03, lie outside either probe's own
+range (×0.59–×1.32), so they are QC selection flips (`chiMean` changed which
+probes it combines). The combined `chiMean` median is unchanged (9.1e-9
+K²/s), and so is Γ (0.102).
 
 The recipe is the one proven on this same glider and MicroRider at
 `Taiwan/Taiwan17/gliders/doug/`; read that README and Taiwan13's husker

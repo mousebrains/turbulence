@@ -3,10 +3,12 @@
 Microstructure from the Rockland MicroRider carried by Slocum glider `doug`
 during CASPER-East (R/V *Atlantic Explorer*), on the 50 m shelf off Duck,
 North Carolina. **4,653 profiles from 137 of 173 files**, 2015-10-12 13:13 →
-2015-11-05 18:22, 2.5–45.5 m. **Reprocessed 2026-11-03 on main 2aa9caf**
-(`microstructure-tpw 0.4.0 (git v0.4.0-61-g2aa9caf42eec)`, stamped in every
-product) for #257; before that 2026-10-17 on 98b4206 (that set, `Processed_prev_20261017/`,
-was deleted 2026-11-03); first processed 2026-09-20.
+2015-11-05 18:22, 2.5–45.5 m. **Rebuilt 2026-11-08 on main 92938ae**
+(`microstructure-tpw 0.4.0 (git v0.4.0-66-g92938ae9b492)`, stamped in every
+product) for #278; before that 2026-11-03 on 2aa9caf for #257 (that set is
+kept on SeaChest as `Processed_prev_2aa9caf/`) and 2026-10-17 on 98b4206 (that
+set, `Processed_prev_20261017/`, was deleted 2026-11-03); first processed
+2026-09-20.
 
 Twin of `../../../../2017_West/gliders/20170929_doug_CASPER/analysis/` — same
 glider, same MicroRider, same recipe. Read that README too; this one records
@@ -157,6 +159,21 @@ record itself has 37 h / 17 h / 14 h gaps, so no speed exists), `CAS_066` (the
 glider sat on the surface — 0.43 dbar for a 49-minute record, against 33–39
 dbar either side), `CAS_170` (header dated 2016-08-08) and `DAT_001`–`003`
 (bench). All correct refusals.
+
+## What changed from the 2aa9caf set (rebuild 2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. The same 4,653
+profiles and 35 file errors. Paired per window, the 2aa9caf tree against the
+rebuild, every window:
+- **ε, N², dT/dz and K_ρ: identical** (229,336 windows).
+- **χ:** `chiMean` 5–95% 0.992–1.007; 6.5% of windows move by more than 1%,
+  0.85% by more than 5%. A single probe moves ×0.23–×4.7 at the extremes;
+  `chiMean`'s ×0.09 and ×10 lie outside that, so they are QC selection flips
+  (`chiMean` changed which probes it combines). The combined `chiMean`, T1 and
+  T2 medians are ×1.000, and the table's medians are unchanged at the digits
+  shown.
 
 ## What changed from the 2026-10-17 set (rerun 2026-11-03)
 

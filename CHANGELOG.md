@@ -404,17 +404,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     The L1 writer's `TEMP` already holds the same channels as float64, so
     profiles cut from an L1 file stay bit-identical to profiles cut from the
     `.p`.
+  - **A stated sensor type wins over the name**, so a fast FP07 channel
+    typed `poly` stays float32. The Taiwan 2013 VMP's files type theirs so,
+    for an in-situ quadratic calibration; found in the rebuild below. Whether
+    the name rule should apply whatever the type is open.
   - **Measured on Taiwan 2017 `DAT_160` and ARCTERX 2025
     `AIOP2_VMP194_0006`** (rsi-tpw `prof` then `chi`, 2,351 windows): the
     stored spectra now equal the `.p` route's in every band. Chi's paired
     median ratio is 1.00000 (5-95% within +-0.1%). 73 near-floor windows in
     ~29 C water (3.1%; median chi 2e-10) move by more than 1%, and 5 by more
-    than 5% (at most x1.19).
+    than 5% (at most x1.19). Those two files are VMPs, and the rebuild below
+    shows they understate the effect on gliders.
   - **Cost:** the per-profile files grow x1.48 (50.4 -> 74.4 MB for those
     two `.p` files).
-  - Existing products are not rebuilt. Like any source change, this one
-    changes perturb's engine fingerprint, so a rerun writes new stage
-    directories rather than reusing the float32 ones.
+  - **Every campaign was rebuilt on 92938ae (2026-11-08/09)**, with the
+    same configs. It covered the 2026-11-05 reprocess, plus RIOT 2026's two
+    gliders and CASPER-East doug. Each old product was paired with its rebuild
+    window by window:
+    - **Exactly equal in every window of every tree:** epsilon, dT/dz, N2 and
+      K_rho, over the same profiles and window grids.
+    - **VMPs** (the 54 SUNRISE trees, Method 1, and nine other deployments):
+      per-window `chiMean` 5-95% within +-0.2%; 0.2-3.2% of windows move by
+      more than 1%.
+    - **Gliders and MicroRiders** (18 trees; iterative Method 2, band S/N ~1):
+      5-95% within +-0.15-1.9%; 1.6-15% of windows move by more than 1%, and
+      up to 3.5% by more than 5%. Our reading, not tested separately: at band
+      S/N ~1 the fit is ill-conditioned, so a ~0.3% change per bin moves it.
+      A single probe moves by up to x0.04-x64 (CASPER-West doug's T2).
+    - **Combined `chiMean` medians** move by at most 0.3% anywhere.
+    - **The largest `chiMean` moves are selection flips:** x0.08-x14 on VMPs,
+      and from below x0.001 to x9089 on gliders. A probe crosses the soft-QC
+      limits (fom, K_max_ratio), so `chiMean` changes between one probe and
+      the geometric mean of both, or a window enters or leaves the
+      `chiQCFallback` set. On SUNRISE a single probe's chi moves x0.47-x1.60
+      at most.
+    - **Not rebuilt:** Taiwan 2013 husker MR046 and Tanaka unit211 2015,
+      whose product of record stays on 98b4206 (#273).
+    - **The Taiwan 2013 VMP** was rebuilt, but it is unchanged (its `poly`
+      channels, above), so it keeps its 8748b90 products.
+  - Like any source change, this one changes perturb's engine fingerprint, so
+    a rerun writes new stage directories rather than reusing the float32 ones.
 - **The chi noise model now uses the FP07 coefficients the data were
   converted with, and inverts a fitted curve exactly (issue #245).** Under
   perturb's `fp07.calibrate: true` the channel data were on the per-file

@@ -6,9 +6,9 @@ The glider record runs 2017-07-24 → 08-30; the MicroRider record runs
 07-24 23:34 → 08-14 (158 files, 16.9 GB). The MR (SN 247, top-mounted)
 carried two shear probes, two FP07s and AEM1-G EM sensor 010. A 600 kHz RDI
 DVL looked down and recorded descents only, 07-24 → 07-31.
-**Reprocessed 2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
-v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
-(2026-10-17); first processed 2026-10-13.
+**Rebuilt 2026-11-08 on main 92938ae** (`microstructure-tpw 0.4.0 (git
+v0.4.0-66-g92938ae9b492)`, stamped in every product); before that on 8748b90
+(2026-11-05) and 98b4206 (2026-10-17); first processed 2026-10-13.
 
 ## Verdict
 
@@ -104,6 +104,20 @@ it too.
 ε here is near the shear-probe floor (above). A floor-limited ε reads high,
 which would bias Γ low (reasoning, not separately tested).
 
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. Paired per window,
+the 8748b90 trees against the rebuild, every window:
+- `Processed/`: the same 345 profiles; **ε identical** (398,170 windows), the
+  N² medians unchanged, still no χ.
+- `Processed_chi_T1/`: **ε, N², dT/dz and K_ρ identical**. `chi_1` 5–95%
+  0.9994–1.0006; 1.4% of windows move by more than 1%, 0.25% by more than 5%,
+  ×0.73–×1.89 at the extremes. `chiMean`'s ×0.36 and ×3.0 lie outside both
+  probes' ranges: selection flips involving the pinned T2. The binned `chi_1`
+  median is ×1.000, and the table's medians are unchanged at the digits shown.
+
 ## What changed from the 98b4206 set (2026-11-05)
 
 - `Processed/`: the same 345 profiles; **ε, N² and dT/dz bit-identical**
@@ -161,7 +175,7 @@ The same 345 profiles, 1-m bins.
    - Per-day dynamic C_D0: 0.188–0.198 over 22 days (median 0.192).
    - Modeled AOA: −4.8° on dives at −22.5° pitch, +3.9° on climbs.
 4. **`perturb run -c perturb.yaml -j 8`** (~8.5 min; these files were made on
-   main 8748b90).
+   main 92938ae).
 5. **`perturb run -c perturb_chi_T1.yaml -j 3`** → `Processed_chi_T1/` (~1.5 min).
 
 ## The speed is checked against the paper's DVL
