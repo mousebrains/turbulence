@@ -674,14 +674,19 @@ def p_to_L1(
 
     # Supplementary channels (V_Bat, Gnd, etc.) — dynamic names/types
     from odas_tpw.perturb.netcdf_schema import canonicalize_units
+    from odas_tpw.rsi.profile import _storage_dtype
 
     use_zlib = complevel > 0
     for name in supplementary:
         info = pf.channel_info[name]
-        dim = ("TIME",) if pf.is_fast(name) else ("TIME_SLOW",)
+        fast = pf.is_fast(name)
+        dim = ("TIME",) if fast else ("TIME_SLOW",)
         var_name = name.replace(" ", "_")
-        v = L1.createVariable(var_name, "f4", dim, zlib=use_zlib, complevel=complevel)  # type: ignore[call-overload]
-        v[:] = pf.channels[name].astype(np.float32)
+        # float32, but for an FP07 chi reads by name whose stated type is not
+        # "therm" (so not in TEMP): float64, as the per-profile writer stores it.
+        dtype = _storage_dtype(name, "time_fast" if fast else "time_slow", info["type"])
+        v = L1.createVariable(var_name, dtype, dim, zlib=use_zlib, complevel=complevel)  # type: ignore[call-overload]
+        v[:] = pf.channels[name].astype(np.float64 if dtype == "f8" else np.float32)
         # RSI emits non-UDUNITS unit strings (e.g. 'deg', 'mS_cm-1', 'deg_C');
         # canonicalize to match the per-profile writer (profile.py).
         v.units = canonicalize_units(info["units"])

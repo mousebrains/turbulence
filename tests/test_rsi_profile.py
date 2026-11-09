@@ -555,7 +555,13 @@ class TestLoadFromNcClosesOnError:
         ("Ax", "time_fast", "piezo", "f4"),
         ("P_dP", "time_fast", "poly", "f4"),
         ("JAC_T", "time_slow", "jac_t", "f4"),
-        ("T1", "time_fast", "poly", "f4"),  # a stated type wins over the name
+        # The names chi reads an FP07 by win over a stated type (Taiwan 2013's
+        # in-situ calibrated VMP files state "poly").
+        ("T1", "time_fast", "poly", "f8"),
+        ("T2_dT2", "time_fast", "poly", "f8"),
+        ("T1", "time_slow", "poly", "f4"),
+        ("Tx", "time_fast", "poly", "f4"),
+        ("T", "time_fast", "therm", "f8"),  # a stated therm type, whatever the name
         ("T1_dT1", "time_fast", "thermistor", "f8"),  # the alias fp07_cal accepts
         ("T1_dT1", "time_fast", " Therm ", "f8"),
         # No sensor_type, or an empty one (an external NetCDF source): judged
