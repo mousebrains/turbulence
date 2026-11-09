@@ -388,6 +388,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   warns).
 
 ### Fixed
+- **A fast FP07 channel is float64 by its name, whatever its stated type
+  (#278, follow-up to #279).** #279 judged a channel by its `sensor_type` and
+  fell back on the names only when the type was missing, but chi selects its
+  FP07 channels by name alone (`T<n>_dT<n>`, else `T<n>`). The Taiwan 2013
+  VMP's files state `poly` for theirs (their in-situ calibration against the
+  VMP's own SBE3), so those channels stayed float32.
+  - **The rule now:** a fast channel named `T<n>` or `T<n>_dT<n>` is float64
+    whatever its type, and so is a fast `therm`/`thermistor` channel whatever
+    its name. The L1 writer stores such a channel, which its `TEMP` (`therm`
+    only) leaves out, as a float64 supplementary variable, so the `.p` and L1
+    routes stay bit-identical.
+  - **The Taiwan 2013 VMP, measured on the branch (a73c1b3) against its
+    8748b90 products** (57 profiles, 13,518 windows):
+    - epsilon, N2, dT/dz and K_rho are identical;
+    - per-window `chiMean` 5-95% is within 0.9994-1.0004, and 0.75% of
+      windows move by more than 1% and 0.13% by more than 5% (x0.48-x1.30);
+    - the combined `chiMean` median (1.707e-08 K^2/s) and Gamma (0.247) are
+      unchanged.
+  - **Its spectra over 240-250 Hz fall from 96x the noise model to 3.4x**
+    (median over windows and probes; 200-210 Hz: 8.0x to 4.6x). What is left
+    was there before and is not rounding: 2-7x the model from 60 to 130 Hz
+    (median 7.3x over 100-130 Hz) and a peak of ~265x at 160-170 Hz, the same
+    on both. Not investigated.
 - **Per-profile NetCDFs store the fast FP07 channels as float64 (issue
   #278).** `extract_profiles` (perturb's `profiles_NN/`, `rsi-tpw prof`) wrote
   every channel as float32.
@@ -396,18 +419,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - **The symptom:** every chi spectrum computed from these files climbed
     above ~160 Hz, to 67-79x the noise model at 240-250 Hz. Chi from the `.p`
     stayed at 0.7-1.0 there.
-  - **The rule:** fast channels of sensor type `therm` (or its alias
-    `thermistor`, in any case; without a `sensor_type`, or with an empty one,
-    the names `T<n>` and `T<n>_dT<n>`) are now float64.
+  - **The rule (#279; widened by the entry above):** fast channels of sensor
+    type `therm` (or its alias `thermistor`, in any case; without a
+    `sensor_type`, or with an empty one, the names `T<n>` and `T<n>_dT<n>`)
+    are now float64.
     Every other channel stays float32, where it is harmless (shear's rounding
     noise is <= ~1e-13 of its spectrum, and the piezos are integer counts).
     The L1 writer's `TEMP` already holds the same channels as float64, so
     profiles cut from an L1 file stay bit-identical to profiles cut from the
     `.p`.
-  - **A stated sensor type wins over the name**, so a fast FP07 channel
-    typed `poly` stays float32. The Taiwan 2013 VMP's files type theirs so,
-    for an in-situ quadratic calibration; found in the rebuild below. Whether
-    the name rule should apply whatever the type is open.
+  - **A stated sensor type won over the name**, so a fast FP07 channel
+    typed `poly` stayed float32. The Taiwan 2013 VMP's files type theirs so,
+    for an in-situ quadratic calibration; found in the rebuild below. The
+    name now decides (the entry above).
   - **Measured on Taiwan 2017 `DAT_160` and ARCTERX 2025
     `AIOP2_VMP194_0006`** (rsi-tpw `prof` then `chi`, 2,351 windows): the
     stored spectra now equal the `.p` route's in every band. Chi's paired
@@ -440,8 +464,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
       at most.
     - **Not rebuilt:** Taiwan 2013 husker MR046 and Tanaka unit211 2015,
       whose product of record stays on 98b4206 (#273).
-    - **The Taiwan 2013 VMP** was rebuilt, but it is unchanged (its `poly`
-      channels, above), so it keeps its 8748b90 products.
+    - **The Taiwan 2013 VMP** was rebuilt, but it was unchanged (its `poly`
+      channels, above), so it kept its 8748b90 products until the name rule
+      (the entry above).
   - Like any source change, this one changes perturb's engine fingerprint, so
     a rerun writes new stage directories rather than reusing the float32 ones.
 - **The chi noise model now uses the FP07 coefficients the data were
