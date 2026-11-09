@@ -42,7 +42,7 @@ from odas_tpw.rsi.convert import (
 from odas_tpw.rsi.dissipation import compute_diss_file
 from odas_tpw.rsi.helpers import load_channels
 from odas_tpw.rsi.p_file import SHEAR_INTERMEDIATE_COMMENT, PFile, parse_config
-from odas_tpw.rsi.profile import _load_from_nc, extract_profiles
+from odas_tpw.rsi.profile import _load_from_nc, _storage_dtype, extract_profiles
 from tests.test_bad_buffer_masks import _inject_fast_run, _inject_slow_run
 
 DATA = Path(__file__).parent / "data"
@@ -101,6 +101,14 @@ def sn479(cases) -> Case:
 
 def _attrs(obj) -> dict:
     return {a: obj.getncattr(a) for a in obj.ncattrs()}
+
+
+def _dim(pf: PFile, name: str) -> str:
+    return "time_fast" if pf.is_fast(name) else "time_slow"
+
+
+def _type(pf: PFile, name: str) -> str:
+    return str(pf.channel_info[name]["type"])
 
 
 def _same(a, b) -> bool:
@@ -219,9 +227,10 @@ class TestStorageTypes:
 
     def test_every_other_channel_stays_float32(self, case):
         pf = case.pf
-        others = [
-            n for n in pf.channels if not (pf.is_fast(n) and pf.channel_info[n]["type"] == "therm")
-        ]
+        others = [n for n in pf.channels if _storage_dtype(n, _dim(pf, n), _type(pf, n)) == "f4"]
+        assert not any(  # the rule's float32 set is every channel but the fast FP07s
+            pf.is_fast(n) and pf.channel_info[n]["type"] == "therm" for n in others
+        )
         assert {"sh1", "P", "T1"} <= set(others)  # T1 is a slow channel here
         for path in (*case.from_p, *case.from_nc):
             with netCDF4.Dataset(str(path)) as ds:
@@ -260,6 +269,7 @@ class TestAStatedTypeDoesNotDemoteAnFP07:
     def test_float64_and_exact_on_both_routes(self, poly_case):
         pf = poly_case.pf
         fast = [n for n in _FP07 if pf.is_fast(n)]
+        assert fast == ["T1_dT1", "T2_dT2"]
         for path in (*poly_case.from_p, *poly_case.from_nc):
             with netCDF4.Dataset(str(path)) as ds:
                 t = ds.variables["t_fast"][:]
@@ -275,7 +285,9 @@ class TestAStatedTypeDoesNotDemoteAnFP07:
         with netCDF4.Dataset(str(poly_case.l1)) as ds:
             g = ds.groups["L1_converted"]
             assert "TEMP" not in g.variables  # no "therm" channel to put there
-            for name in (n for n in _FP07 if pf.is_fast(n)):
+            fast = [n for n in _FP07 if pf.is_fast(n)]
+            assert fast == ["T1_dT1", "T2_dT2"]
+            for name in fast:
                 assert g.variables[name].dtype == np.float64, name
                 assert g.variables[name].sensor_type == "poly"
 

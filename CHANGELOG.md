@@ -398,7 +398,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     whatever its type, and so is a fast `therm`/`thermistor` channel whatever
     its name. The L1 writer stores such a channel, which its `TEMP` (`therm`
     only) leaves out, as a float64 supplementary variable, so the `.p` and L1
-    routes stay bit-identical.
+    routes stay bit-identical. An L1 file written before this change still
+    holds such a channel as float32, and profiles cut from it carry that
+    rounding: rewrite it with `rsi-tpw nc` first.
   - **The Taiwan 2013 VMP, measured on the branch (a73c1b3) against its
     8748b90 products** (57 profiles, 13,518 windows):
     - epsilon, N2, dT/dz and K_rho are identical;
