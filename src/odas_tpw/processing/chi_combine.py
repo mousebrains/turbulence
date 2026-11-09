@@ -140,10 +140,15 @@ def mk_chi_mean(
     # chiMean (and the K_T / Gamma built from it) is filtered consistently with the
     # rsi pipeline.  It is SOFT: if no probe in a window passes, that window's
     # probes are all restored (no window is ever dropped), mirroring
-    # `_compute_chi_final`'s fallback.  For 2-probe Method-1 data the K_max_ratio
-    # floor is largely inert (both probes share the epsilon-derived kB, so they
-    # pass/fail together and the fallback keeps both) — the QC only re-weights
-    # windows where the probes genuinely disagree in fit quality.
+    # `_compute_chi_final`'s fallback.  The K_max_ratio floor is NOT inert for
+    # 2-probe Method-1 data: the probes share the epsilon-derived kB, but each
+    # probe's K_max is the top of its OWN band above 2x its noise
+    # (chi._chi_from_epsilon), so one probe can pass while the other fails.  That
+    # window's chiMean is then the passing probe's chi alone instead of the
+    # geometric mean of both, which matters wherever the probes disagree in
+    # level.  In the float64 rebuild of #278 the passing set changed in 0.76% of
+    # one SUNRISE deployment's windows, and across SUNRISE such flips made the
+    # largest chiMean changes (x0.08-x2.9).
     qc_comment: str | None = None
     qc_fallback = np.zeros(n_time, dtype=bool)
     if fom_limit is not None and k_max_ratio_min is not None:
