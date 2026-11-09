@@ -4182,6 +4182,7 @@ def process_file(
                             out_path = output_dirs["chi"] / out_name
                             _atomic_to_netcdf(chi_ds, out_path)
                             result["chi"].append(str(out_path))
+                            _tally_noise_defaults(result, chi_ds.attrs)
                     except Exception as exc:
                         logger.error("chi for %s: %s", Path(prof_path).name, exc)
                         result.setdefault("errors", []).append(f"chi {Path(prof_path).name}: {exc}")
@@ -4893,6 +4894,47 @@ def _probe_exclusion_notices(
     return lines
 
 
+def _tally_noise_defaults(result: dict, attrs: dict[str, Any]) -> None:
+    """Record in *result* the thermistors whose chi noise model ran on defaults (#282).
+
+    From a chi product's ``fp07_noise_defaults_<channel>`` attrs: ``result[
+    "fp07_noise_defaults"]`` maps each such channel to its space-separated keys.
+    Nothing is recorded for a product without them.
+    """
+    from odas_tpw.rsi.chi_io import NOISE_DEFAULTS_ATTR
+
+    prefix = f"{NOISE_DEFAULTS_ATTR}_"
+    for key, value in attrs.items():
+        if str(key).startswith(prefix):
+            result.setdefault("fp07_noise_defaults", {})[str(key)[len(prefix):]] = str(value)
+
+
+def _noise_default_notices(outcomes: dict[str, dict[str, str]]) -> list[str]:
+    """Run-summary lines for chi noise models on generic defaults (issue #282).
+
+    *outcomes* maps a file's output stem to its ``result["fp07_noise_defaults"]``. One line
+    per distinct set of channels and keys, naming its files. Like
+    :func:`_fp07_notices`, only files processed this run are named: a file the
+    cache skipped keeps the mark in its chi products.
+    """
+    groups: dict[tuple[tuple[str, str], ...], list[str]] = {}
+    for name, rec in sorted(outcomes.items()):
+        if rec:
+            groups.setdefault(tuple(sorted(rec.items())), []).append(name)
+    from odas_tpw.rsi.chi_io import describe_noise_defaults
+
+    lines = []
+    for sig, names in groups.items():
+        what = describe_noise_defaults({ch: keys.split() for ch, keys in sig})
+        lines.append(
+            f"FP07 noise model: {len(names)} file(s) gave chi's noise model no {what} "
+            "(a thermistor section typed other than 'therm' carries none), so it used "
+            "the generic defaults and the noise level is not the instrument's; chi "
+            f"near the noise floor is affected (#282). Files: {', '.join(names)}"
+        )
+    return lines
+
+
 def _tally_slow_response(rec: dict, attrs: dict[str, Any], label: str) -> None:
     """Fold one chi product's ``fp07_slow_response_*`` attributes into *rec*.
 
@@ -5382,6 +5424,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     # Keyed by output stem, not file name: same-named .p files in different
     # directories are different files (_source_output_stem).
     slow_outcomes: dict[str, dict] = {}
+    noise_default_outcomes: dict[str, dict[str, str]] = {}
     # A file the cache skipped keeps its recorded slow-path outcome, so its
     # notices (a guard that flagged a swap) recur in every run's summary.
     slow_cfg_keys = {
@@ -5419,6 +5462,8 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                 exclusion_outcomes[p_path.name] = result["probe_exclusions"]
             if isinstance(result, dict) and "fp07_slow_response" in result:
                 slow_outcomes[_output_stem(p_path)] = result["fp07_slow_response"]
+            if isinstance(result, dict) and result.get("fp07_noise_defaults"):
+                noise_default_outcomes[_output_stem(p_path)] = result["fp07_noise_defaults"]
     else:
         # Spawn workers each get a per-pid log file inside <output_root>/logs/
         # so multi-process runs are diagnosable.  ``run_stamp`` is the parent
@@ -5461,6 +5506,10 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
                         exclusion_outcomes[p.name] = result["probe_exclusions"]
                     if isinstance(result, dict) and "fp07_slow_response" in result:
                         slow_outcomes[_output_stem(p)] = result["fp07_slow_response"]
+                    if isinstance(result, dict) and result.get("fp07_noise_defaults"):
+                        noise_default_outcomes[_output_stem(p)] = result[
+                            "fp07_noise_defaults"
+                        ]
                 except Exception as exc:
                     # The worker died rather than returning a result, so its own
                     # `errors` list never made it back; record the future's
@@ -5486,6 +5535,7 @@ def run_pipeline(config: dict, p_files: list[Path] | None = None) -> PipelineRes
     outcome.notices += _slow_response_notices(
         config.get("instruments"), {_instrument_key(p) for p in p_files}, slow_outcomes
     )
+    outcome.notices += _noise_default_notices(noise_default_outcomes)
     # Whole and at WARNING: the summary clips each line (a file list is longer
     # than that) and is logged at INFO on a run with no errors, which
     # `--log-level warning` would hide.
