@@ -115,6 +115,25 @@ within-leg settling drift (~1°/100 s) looks like downstream.
 unrelated platforms. Worth a look. **Most of it was the density sort** (below):
 reprocessed, Γ here is 0.24.
 
+## Rebuilt 2026-11-08 on main 92938ae
+
+All three product sets were rebuilt with `microstructure-tpw 0.4.0 (git
+v0.4.0-66-g92938ae9b492)`, stamped in every product, for #278 (PR #279): the
+per-profile files now store the fast FP07 channels as float64. float32
+rounding noise, differentiated, rose as f² and lifted χ spectra above
+~160 Hz; the χ band ends at 98 Hz. Paired per window against the 8748b90
+sets, every window:
+
+- **ε, N², dT/dz and K_ρ: identical** (10,327 windows in each arm).
+- **χ:** `chiMean` 5–95% 0.9987–1.0005 (`em`) and 0.9985–1.0006 (`flight`);
+  3.4% and 3.6% of windows move by more than 1%, 0.2% by more than 5%. The
+  largest moves, ×1.93 (`em`) and ×0.51 and ×1.88 (`flight`), lie outside
+  either probe's own range (×0.72–×1.17): QC selection flips, where
+  `chiMean` changed which probes it combines. The combined `chiMean` median
+  is ×0.998 (`em`) and ×1.001 (`flight`); Γ stays 0.241 and 0.218.
+- `dat_0377`: χ 5–95% 0.991–1.001 over its 40 windows, ×0.988–×1.010 at
+  most; ε unchanged.
+
 ## Reprocessed 2026-11-05 on main 8748b90
 
 All three product sets were rebuilt with `microstructure-tpw 0.4.0 (git

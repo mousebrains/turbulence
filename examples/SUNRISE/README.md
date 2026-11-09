@@ -93,6 +93,28 @@ so one could charge), verified against SN 412's own working casts to within
   (SeaChest `Data/UNDERWAY_README.md`), and every 2021 profile now has a
   position.
 
+## Rebuilt 2026-11-08 on main 92938ae
+
+All 54 runs were rebuilt with `microstructure-tpw 0.4.0 (git
+v0.4.0-66-g92938ae9b492)`, stamped in every product, with the same configs as
+the 8748b90 set (2021 WaltonSmith SN142's carry the eight-file T2 exclusion of
+open PR #276, applied 2026-11-08), for #278 (PR #279): the per-profile files now store the fast FP07 channels as
+float64. float32 rounding noise, differentiated, rose as f² and lifted χ
+spectra above ~160 Hz; the χ band ends at 98 Hz. Paired per window against
+the 8748b90 set (top-down trees every 5th profile file, the others every
+50th):
+
+* **ε, N², dT/dz and K_ρ: identical** in every window of all 54 runs, over the
+  same profiles and window grids. The file errors are the same two.
+* **χ:** `chiMean` 5–95% within 0.9980–1.0015 in every run; 0.24–3.2% of
+  windows move by more than 1%, 0.08–1.8% by more than 5%. A single probe
+  (`chi_1`, `chi_2`) moves ×0.47–×1.60 at most. The `chiMean` extremes, ×0.076
+  and ×2.86, are probe-selection flips, not χ changes: a probe's K_max_ratio
+  or fom crosses the soft-QC limit, so `chiMean` switches between one probe
+  and the geometric mean of both. Combined `chiMean` medians move by at most
+  0.2%, and the top-down QC-pass medians of the campaign table (SeaChest
+  `Data/CAMPAIGN_RESULTS.md`) by at most +0.43%.
+
 ## Reprocessed 2026-11-05 on main 8748b90
 
 All 54 runs were rebuilt with `microstructure-tpw 0.4.0 (git

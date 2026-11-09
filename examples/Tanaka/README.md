@@ -30,12 +30,17 @@ profile 1,798 km off, and its `dinkum-flight.yaml` now floors positions at
 
 All seven were reprocessed on main 8748b90 on 2026-11-05 (ε bit-identical
 everywhere). `20170620_sea025`, `20170724_unit095` (both trees) and
-`20220224_unit211` now carry that set, and their READMEs give what changed.
+`20220224_unit211` were rebuilt on main 92938ae on 2026-11-08 for #278 (the
+per-profile files now store the fast FP07 channels as float64): ε identical
+in every window, and N², dT/dz and K_ρ wherever χ is computed; per-window χ
+5–95% within 0.9947–1.0035; combined `chiMean` medians ×1.000. They carry
+that set, and their READMEs give what changed.
 **The three 2015 unit211 deployments stay on their 98b4206 set as the product
-of record.** Since #245, χ's noise model uses the in-situ fitted FP07
-coefficients. On SN 058 that puts the model floor below the floor actually
-observed over 60–100 Hz (×1.19–1.41 of the new model, ×1.00–1.15 of the old).
-The 8748b90 sets are held beside them on SeaChest as
+of record** and were not rebuilt on 92938ae. Since #245, χ's noise model
+uses the in-situ fitted FP07 coefficients. On SN 058 that puts the model
+floor below the floor actually observed over 60–100 Hz (×1.19–1.41 of the
+new model, ×1.00–1.15 of the old). The 8748b90 sets are held beside them on
+SeaChest as
 `Processed_new_20261105_held/`; see each README and #273.
 
 The steps are the same as for the CASPER and Taiwan gliders: decode the glider

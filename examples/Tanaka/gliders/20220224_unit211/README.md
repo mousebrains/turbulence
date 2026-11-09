@@ -3,9 +3,10 @@
 T. Tanaka's 2022 glider deployment, west of Okinawa: 25.60-25.77 N,
 126.93-127.00 E, in water 2022-02-24 23:37 .. 02-27 22:48 UTC. Dives to about
 1000 m, then four 300-m dives at the end. The data arrived on 2026-10-18 (see
-"Intake 2026-10-18" in the SeaChest `Tanaka/README.md`). **Reprocessed
-2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git v0.4.0-62-g8748b90253db)`, stamped in
-every product); first processed 2026-10-19 (UTC) on main 98b4206.
+"Intake 2026-10-18" in the SeaChest `Tanaka/README.md`). **Rebuilt
+2026-11-08 on main 92938ae** (`microstructure-tpw 0.4.0 (git v0.4.0-66-g92938ae9b492)`, stamped in
+every product); before that on 8748b90 (2026-11-05); first processed
+2026-10-19 (UTC) on main 98b4206.
 
 ## Verdict
 
@@ -194,6 +195,20 @@ diagnostic run; nothing was applied.
   - No product is affected: the first profile starts 02-25 00:32, and product
     latitudes span 25.60-25.77 N.
 
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. The same 54
+profiles and 4 file errors. Paired per window, the 8748b90 tree against the
+rebuild, every window:
+- **ε, N², dT/dz and K_ρ: identical** (55,163 windows).
+- **χ:** `chiMean` 5–95% 0.9947–1.0035; 4.3% of windows move by more than 1%,
+  1.2% by more than 5%. A single probe moves ×0.11–×5.9 at the extremes;
+  `chiMean`'s ×25 lies outside that, so it is a QC selection flip (`chiMean`
+  changed which probes it combines). The combined `chiMean` median is ×1.000,
+  and the table's all-profile medians are unchanged at the digits shown.
+
 ## What changed from the 98b4206 set (2026-11-05)
 
 The same 54 profiles and windows:
@@ -220,7 +235,7 @@ The same 54 profiles and windows:
    already on the MR clock.
 5. `perturb run -c perturb.yaml -j 4` (~7 min, run with
    `HDF5_USE_FILE_LOCKING=FALSE` on SeaChest). These files were made on main
-   8748b90.
+   92938ae.
 
 ## Untested, and worth doing
 

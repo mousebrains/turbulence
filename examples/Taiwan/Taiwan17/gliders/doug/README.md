@@ -2,10 +2,11 @@
 
 Microstructure from the MicroRider carried by Slocum glider `doug` during
 R/V Roger Revelle cruise RR1704 (project SK-II), Luzon Strait. **530 profiles
-from 72 of 80 files**, 2017-02-19 – 02-28, reprocessed 2026-11-05 on `main`
-8748b90 (`git v0.4.0-62-g8748b90253db`, stamped in every product). It
-replaces the 2026-10-16 set made on 98b4206, which replaced the 2026-09-15
-set; see [What changed](#what-changed-from-the-98b4206-set-2026-11-05).
+from 72 of 80 files**, 2017-02-19 – 02-28, rebuilt 2026-11-08 on `main`
+92938ae (`git v0.4.0-66-g92938ae9b492`, stamped in every product). It
+replaces the 2026-11-05 set made on 8748b90, which replaced the 2026-10-16
+set made on 98b4206, which replaced the 2026-09-15 set; see
+[What changed](#what-changed-from-the-8748b90-set-2026-11-08).
 
 | | |
 |---|---|
@@ -57,6 +58,20 @@ Median and MAD (×1.4826) of log10 over the bins of `chi_combo_00/combo.nc`
 holding a finite, positive value. **14.5% of bins have N² ≤ 0** under the
 temperature sort, and the N² row leaves them out. Γ and K_ρ are masked per
 window where N² < N2_min and only then binned.
+
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. The same 530
+profiles. Paired per window, the 8748b90 tree against the rebuild, every
+window:
+- **ε, N², dT/dz and K_ρ: identical** (155,616 windows).
+- **χ:** `chiMean` 5–95% 0.992–1.007; 6.9% of windows move by more than 1%,
+  1.5% by more than 5%. A single probe moves ×0.04–×8.4 at the extremes;
+  `chiMean`'s ×0.012 and ×9.8 lie outside that, so they are QC selection flips
+  (`chiMean` changed which probes it combines). The combined `chiMean` median
+  is ×0.999, and the table's medians are unchanged at the digits shown.
 
 ## What changed from the 98b4206 set (2026-11-05)
 
@@ -144,5 +159,5 @@ and do not treat `epsilonMean` as calibrated.
 
 ```bash
 cd /Volumes/SeaChest/Taiwan/Taiwan17/gliders/doug
-perturb run -c perturb.yaml -j 8        # ~8 min; these files were made on main 8748b90
+perturb run -c perturb.yaml -j 8        # ~8 min; these files were made on main 92938ae
 ```

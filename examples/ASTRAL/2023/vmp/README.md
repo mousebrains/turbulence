@@ -1,11 +1,11 @@
 # ASTRAL 2023 — VMP-250IR-DL3 SN 92, Arabian Sea
 
 **183 profiles from 13 deployments (D2–D14), no errors.** 2023-06-17 15:08 →
-06-24 13:55, 11.77–12.26 N / 66.58–67.80 E, casts to 263 m. **Reprocessed
-2026-11-05 on main 8748b90** (`microstructure-tpw 0.4.0 (git
-v0.4.0-62-g8748b90253db)`, stamped in every product); before that on 98b4206
-(2026-10-17); rebuilt and reorganized 2026-09-20, when the earlier
-`Processed/` had been deleted.
+06-24 13:55, 11.77–12.26 N / 66.58–67.80 E, casts to 263 m. **Rebuilt
+2026-11-08 on main 92938ae** (`microstructure-tpw 0.4.0 (git
+v0.4.0-66-g92938ae9b492)`, stamped in every product); before that on 8748b90
+(2026-11-05) and 98b4206 (2026-10-17); rebuilt and reorganized 2026-09-20,
+when the earlier `Processed/` had been deleted.
 
 **This is not our deployment** — everything below was measured from the files,
 not taken from a cruise document.
@@ -14,7 +14,7 @@ not taken from a cruise document.
 ASTRAL/2023/
   vmp/raw/                 13 astral_VMP_D*.p   (they used to sit in the analysis dir)
   vmp/analysis/            perturb.yaml, calibration/, sections.yaml, this README
-    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00 (2026-11-05)
+    VMP_results/           profiles / diss / chi / ctd (+ _binned, _combo), generation _00 (2026-11-08)
   gps/                     gps.mat (v7.3 HDF5 table), gps.nc, make_gps.py
   FOREIGN_RR2202_met/      NOT ASTRAL -- see below
   REORG_MANIFEST.csv       every move of the 2026-09-20 reorganization
@@ -38,6 +38,19 @@ longer forced positive; salinity scrambles the density order in 6 of 13 files
 (run notice). Γ and K_ρ are masked where N² < N2_min. The shallowest data sit
 at a median 12.5 m: the 2026-09-20 trim (fall-rate residual voter,
 `max_depth: 80`, no floor) is described in `perturb.yaml`.
+
+### What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. Paired per window,
+the 8748b90 tree against the rebuild, every window of the 183 profiles:
+- **ε, N², dT/dz and K_ρ: identical** (23,444 windows).
+- **χ:** `chiMean` 5–95% 0.9995–1.0003; 0.76% of windows move by more than
+  1%, 0.30% by more than 5%. The extremes, ×0.40 and ×1.61, lie outside either
+  probe's own range (×0.49–×1.29): QC selection flips, where `chiMean` changed
+  which probes it combines. The combined `chiMean` median is ×0.999, and the
+  table's medians are unchanged at the digits shown.
 
 ### What changed from the 98b4206 set (2026-11-05)
 

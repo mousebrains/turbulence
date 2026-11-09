@@ -3,10 +3,11 @@
 OSU's Rockland **VMP-250 SN 142** on R/V Roger Revelle cruise **RR1704**
 (project SK-II), Luzon Strait / northeastern South China Sea, **22–26 Feb
 2017**. 18 raw `.P` files; **12 are profiling casts → 100 profiles**,
-reprocessed with `microstructure-tpw` main `8748b90` on 2026-11-05
-(`git v0.4.0-62-g8748b90253db`, stamped in every product). It replaces the
-2026-10-16 set made on `98b4206`, which replaced the 2026-09-15 set made on
-`7736082`; see [What changed](#what-changed-from-the-98b4206-set-2026-11-05).
+rebuilt with `microstructure-tpw` main `92938ae` on 2026-11-08
+(`git v0.4.0-66-g92938ae9b492`, stamped in every product). It replaces the
+2026-11-05 set made on `8748b90`, which replaced the 2026-10-16 set made on
+`98b4206`, which replaced the 2026-09-15 set made on `7736082`; see
+[What changed](#what-changed-from-the-8748b90-set-2026-11-08).
 
 Reorganized 2026-09-15 — see `../README.md`, `../REORG_MANIFEST.csv` and
 `/Volumes/SeaChest/REORG_PLAN_Taiwan17.md` for the evidence behind every
@@ -84,6 +85,18 @@ Water depth under the casts (ship multibeam, `../ship_data/met/met.mat` field
 `MB`) is **1,500–3,000 m**, shoaling toward the NE end of the line; casts reach
 ~120–220 m, so **every cast ends ≥ 1,150 m above the seafloor** — no bottom
 boundary layer and no bottom strikes. `bottom.enable` stays false.
+
+## What changed from the 8748b90 set (2026-11-08)
+
+Rebuilt for #278 (PR #279): the per-profile files now store the fast FP07
+channels as float64. float32 rounding noise, differentiated, rose as f² and
+lifted χ spectra above ~160 Hz; the χ band ends at 98 Hz. Paired per window,
+the 8748b90 tree against the rebuild, every window of the 100 profiles:
+- **ε, N², dT/dz and K_ρ: identical** (22,356 windows).
+- **χ:** `chiMean` 5–95% 0.9995–1.0004; 0.47% of windows move by more than
+  1%, 0.15% by more than 5%, ×0.52–×1.63 at the extremes (a single probe
+  ×0.75–×1.35). The combined `chiMean` median is ×1.000, and the table's
+  medians are unchanged at the digits shown.
 
 ## What changed from the 98b4206 set (2026-11-05)
 
