@@ -242,5 +242,25 @@ netcdf:
   standard_name_vocabulary: "CF Standard Name Table v89"
   Conventions: "CF-1.13, ACDD-1.3"
 
+instruments:
+  SN142:                    # the RAW DIRECTORY NAME of the .p files
+    # SN142's T2 CHANNEL carries broadband noise in these eight files (issue
+    # #277): 2.5-18x the chi noise model over 110-160 Hz in quiet windows, and
+    # ~2x T1 from 40 Hz up, inside the chi band. T2's chi near the floor reads
+    # x1.73 its partner's there (0.92-2.36 by file; x1.04 in the clean files)
+    # and QC does not catch it. It follows the channel, not the bead (T1383
+    # reads normally on SN194 T2 in 2025). T2 is EXCLUDED, not corrected, in
+    # each file: from its header start less 60 s to the next raw file's start,
+    # so chiMean there is T1's. Added 2026-11-08 (Pat: exclude them).
+    exclude:
+      - {probe: T2, start: "2021-06-25T06:20:04Z", stop: "2021-06-25T13:13:15Z", reason: "SR1W_033: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-26T01:47:25Z", stop: "2021-06-26T05:33:49Z", reason: "SR1W_037: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-26T05:32:49Z", stop: "2021-06-26T08:40:43Z", reason: "SR1W_038: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-26T08:39:43Z", stop: "2021-06-27T01:13:39Z", reason: "SR1W_039: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-28T01:35:32Z", stop: "2021-06-28T05:23:29Z", reason: "SR1W_049: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-28T05:22:29Z", stop: "2021-06-28T09:45:39Z", reason: "SR1W_050: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-28T09:44:39Z", stop: "2021-06-28T14:05:02Z", reason: "SR1W_051: SN142 T2 broadband noise (issue #277)"}
+      - {probe: T2, start: "2021-06-30T06:10:09Z", stop: "2021-06-30T10:10:56Z", reason: "SR1W_061: SN142 T2 broadband noise (issue #277)"}
+
 parallel:
   jobs: 3                   # SeaChest is SMB; 8 has produced HDF read failures

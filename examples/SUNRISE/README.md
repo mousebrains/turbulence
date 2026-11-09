@@ -129,8 +129,9 @@ Against the 98b4206 set:
   to 1–4%. Its size depends on the deployment: ×0.95–0.98 in 2021, ×0.80–0.89
   in 2019 and 2022 on the Pelican, and ×0.69 on Point Sur SN194's T1, where
   bin 1 held ~30% of the resolved variance. #245 (the noise model on the
-  fitted FP07 coefficients) moves χ by only ×0.996–1.013 here, because S/N
-  is high.
+  fitted FP07 coefficients) moves each probe's χ by only ×0.996–1.013 here.
+  In 2021 it does change which windows have a χ and which pass QC, and with
+  them every median and Γ: see "2021: #245 also corrects the QC flags" below.
 * **T2005 (SN194 T2, 2021-06-29 → 2022-06-20 08:30Z) is corrected.** Measured
   alone on four Walton Smith files (production against a rerun on the same
   engine without `fp07_slow_response`), T2005's χ rises **×1.295** (5–95%
@@ -141,6 +142,12 @@ Against the 98b4206 set:
   response breaks down (68 files after it). 87% of its T2 windows are masked,
   T1 carries `chiMean` there, and the old T2 read 1.17× T1. So the combined
   `chiMean` falls ×0.55 (#263 and the exclusion together).
+  * Rerun without the exclusion, the engine change alone gives ×0.69, and the
+    exclusion ×0.80.
+  * The exclusion also takes the fallback share from 29% to 53%. All 42,805
+    windows that become fallback lie after the cut, and in every one only T2
+    had passed QC.
+  * The QC-pass median does not move (×1.01), and Γ goes 0.043 → 0.030 → 0.028.
 * The per-file 0.25–2 Hz guard warns on SR1P_523 (−0.276 against a predicted
   −0.159; known before this run) and SR1P_518 (−0.297 over 42 windows, near
   its 40-window minimum; read as scatter, unverified).
@@ -160,6 +167,161 @@ own bins of `chi_combo`:
 | 2022 Pelican SN142 | 0.83 | 0.87 | 0.85 | 0.77 | 0.104 → 0.080 |
 | 2022 Pelican SN412 | 0.83 | 0.87 | 0.85 | 0.76 | 0.107 → 0.084 |
 | 2022 Point Sur SN194 | 0.69 | 0.95 (in span) | 0.58 | 0.55 | 0.043 → 0.028 |
+
+In 2021 the combined `chiMean` and Γ columns carry #245's change in which
+windows count as well as #263's (next section).
+
+### 2021: #245 also corrects the QC flags
+
+Many 2021 files carry embedded FP07 coefficients that are not an FP07's. β₁
+falls outside 2723–3416 K in 10–34 files of each 2021 deployment, and in none
+of 2019 or 2022 except one 2022 Pelican SN412 file. Before #245 the chi noise
+model used them, and in those files it sat far above the data.
+
+* In the seven such files checked, the observed level over 60–100 Hz, in each
+  file's quietest decile of windows, read 0.000–0.86 of that model. At
+  ~1.1 m/s that band still holds the tail of the turbulent signal, so these are
+  upper bounds.
+* Over 110–160 Hz, where the quiet windows hold little signal, T1 reads 1.0–1.1
+  of the new model in all seven. T2 reads 1.1–1.3, except SR1W_051 (2.5) and
+  SR1W_068 (1.7), which carry SN142's T2 noise (below).
+* In files with plausible embedded coefficients the two models agree.
+
+A noise model that high leaves some windows no χ at
+all, and cuts `K_max` short in others, so resolved windows failed
+`K_max_ratio >= 0.5` and were marked `chiQCFallback`.
+
+Measured on all four 2021 deployments. Each was rerun on 98b4206, and every
+rerun reproduces the old products' campaign table row exactly. Each was also
+rerun on 8748b90 with `chi.first_bin: 1` (#263 undone) and its pre-T2005
+config, which leaves #245 as the χ change from 98b4206. The last run of each is
+the production set, which adds #263 and, on SN194, T2005's correction. Medians
+over `chi_combo` bins:
+
+| deployment | run | χ T1 | χ T2 | combined `chiMean` | QC-pass `chiMean` | fallback | Γ |
+|---|---|---|---|---|---|---|---|
+| Pelican SN194 | 98b4206 | 3.103e-08 | 2.314e-08 | 2.696e-08 | 1.374e-08 | 59.3% | 0.093 |
+| Pelican SN194 | 8748b90 without #263, T2005 | 3.056e-08 | 2.222e-08 | 2.633e-08 | 9.307e-09 | 53.2% | 0.085 |
+| Pelican SN194 | 8748b90 | 2.813e-08 | 2.098e-08 | 2.463e-08 | 8.072e-09 | 53.2% | 0.077 |
+| Pelican SN412 | 98b4206 | 6.697e-09 | 7.610e-09 | 7.117e-09 | 4.699e-09 | 33.2% | 0.095 |
+| Pelican SN412 | 8748b90 without #263, T2005 | 6.642e-09 | 7.535e-09 | 7.103e-09 | 4.313e-09 | 30.3% | 0.094 |
+| Pelican SN412 | 8748b90 | 6.038e-09 | 6.904e-09 | 6.464e-09 | 3.840e-09 | 30.3% | 0.086 |
+| Walton Smith SN142 | 98b4206 | 1.890e-08 | 1.832e-08 | 1.770e-08 | 9.163e-09 | 57.4% | 0.131 |
+| Walton Smith SN142 | 8748b90 without #263, T2005 | 1.641e-08 | 1.668e-08 | 1.657e-08 | 6.403e-09 | 50.7% | 0.123 |
+| Walton Smith SN142 | 8748b90 | 1.471e-08 | 1.499e-08 | 1.485e-08 | 5.514e-09 | 50.7% | 0.108 |
+| Walton Smith SN194 | 98b4206 | 8.210e-09 | 5.072e-09 | 6.554e-09 | 5.083e-09 | 58.7% | 0.050 |
+| Walton Smith SN194 | 8748b90 without #263, T2005 | 8.206e-09 | 4.846e-09 | 6.446e-09 | 4.254e-09 | 46.9% | 0.046 |
+| Walton Smith SN194 | 8748b90 | 7.406e-09 | 5.419e-09 | 6.447e-09 | 4.058e-09 | 46.9% | 0.046 |
+
+The observed spectra are identical between the engines; only the noise model
+differs. Paired window by window between 98b4206 and the #245-only run, the
+change is in WHICH windows count, never in a window's value:
+
+* **Windows gain a χ**: 0.3–4.8% of windows on T1 and 0.3–2.7% on T2, with
+  almost none lost. Under the old model, noise subtraction left them no
+  signal. Most are low-χ (medians 6e-11 to 1.2e-09). On Walton Smith SN194's
+  T1, where the old model was more than 1000× too high in most files, they are
+  ordinary windows (median 1.5e-08).
+* **Windows go from fallback to QC-pass**: 2.9% on Pelican SN412, 6.2% on
+  Pelican SN194, 7.3% on Walton Smith SN142 and 12.1% on Walton Smith SN194,
+  with 1–196 going the other way.
+  * Before, only 0.0–0.3% of the flipped windows' probes passed
+    `K_max_ratio >= 0.5`; after, 65–92% do. `kB` is unchanged.
+  * They are low-χ windows: median `chiMean` 6.7e-10 to 2.6e-09, against
+    4.7e-09 to 1.4e-08 for windows that pass in both runs.
+* **Where a window has a χ in both runs, nothing moves**: the paired median
+  per-probe χ is ×1.0000–1.0003 in all four, and `chiMean` ×1.000.
+* **So the medians move because the set does.**
+  * The fallback share falls 3–12 points in the #245 step, and does not move
+    in the #263 step.
+  * The QC-pass median moves ×0.68–0.92, the combined `chiMean` ×0.94–1.00,
+    and per-probe χ ×0.87–1.00.
+* **Γ, K_T and K_ρ use only QC-pass windows**, so Γ moves with them: ×0.91–0.99
+  from #245, before the #263 step.
+
+So the 98b4206 2021 products dropped resolved low-χ windows, and their QC
+flags were wrong. The 8748b90 set is the right one. Its lower medians are
+those windows coming back, not a fall in χ.
+
+### SN142's T2 noise above 100 Hz, and the band a floor test needs
+
+A census of every SUNRISE `.p` file took the median observed/model over the
+quietest decile of each file's windows, frequency by frequency. It shows why
+SR1W_051 and SR1W_068 read high over 60–100 Hz.
+
+* **60–100 Hz holds signal on these casts.** In the quietest windows,
+  observed/model still falls from 5–60 at 30 Hz to 1.1–2.7 at 60 Hz. It
+  reaches ~1.0 only by 80–120 Hz. At 120 Hz SR1W_051's and SR1W_068's T1 read
+  1.00 and 1.03.
+* **Over 110–160 Hz the model fits, by instrument.**
+  * SN142: 0.9–1.2 on T1, in 2019, 2021 and 2022.
+  * SN412: about 1.2 (1.1–1.6) on both probes in every file of both years, so
+    the model sits ~20–25% low there.
+  * SN194: 0.8–0.9 on T1 at Point Sur.
+* **Even that band holds some signal here.** Almost no window on these casts
+  has a Batchelor cutoff `kB·W` below 70 Hz: 0–66 per deployment. The
+  medians are 116–172 Hz. Binned by cutoff, the 110–160 Hz ratio levels off
+  below ~110 Hz at SN142 T1 0.95–1.13, SN194 T1 0.88 and SN412 1.23–1.29.
+* **SN142's T2 carries broadband noise**, which T1 on the same instrument
+  does not.
+  * **2021 Walton Smith:** T2 reads 2.5–18× the model over 110–160 Hz in
+    eight files (SR1W_033, 037, 038, 039, 049, 050, 051, 061), against
+    1.1–1.7 elsewhere. In those files T2 is ~2× T1 from 40 Hz up, inside the
+    χ band.
+  * **2022 Pelican:** T2 reads 1.3–8.5× the model in every file. It departs
+    from T1 only above ~120 Hz, by ×1.3 at 110–130 Hz and ×4 at 130–160 Hz.
+  * **It follows SN142's T2 channel, not the bead** (#277). Its two beads,
+    T1383 (2021) and T2133 (2022), read normally on SN194 and SN412. It
+    began after SN142's FP07 board constants changed (2019–2021), and it is
+    not a step at the CF2 → RDL upgrade (2021–2022): it is absent in 2025 on
+    the same RDL.
+* **In 2021 it biases T2's χ near the floor.** Medians over files:
+
+  | windows | 8 noisy files | 33 clean files |
+  |---|---|---|
+  | low-χ (geometric mean < 1e-9) | χ₂/χ₁ ×1.73 | ×1.04 |
+  | all | ×1.12 | ×1.00 |
+
+  QC does not catch it: T2 passes in 0.41 of those files' windows, and T1 in
+  0.36.
+* **2022 Pelican shows no such low-χ bias.** Its χ₂/χ₁ rise over the
+  deployment is T1's documented degradation.
+
+**Since 2026-11-08, T2 is excluded in those eight files.** The three
+2021 Walton Smith SN142 recipes carry it as `instruments.SN142.exclude`, and
+the six trees were rerun on 8748b90. χ there is T1's. In the top-down tree,
+the bin medians move as follows:
+
+| | before | T2 excluded |
+|---|---|---|
+| combined `chiMean` | 1.485e-08 | 1.476e-08 (×0.99) |
+| QC-pass `chiMean` | 5.514e-09 | 5.616e-09 (×1.02) |
+| fallback | 50.7% | 51.3% |
+| Γ | 0.108 | 0.108 |
+| χ T2 (bins) | 1.499e-08 (105,934) | 1.225e-08 (86,204) |
+
+* **T2's own median falls ×0.82 because the set changed, not because χ was
+  corrected.** The eight files hold 1,520 of 8,183 profiles and 19,730 of
+  105,936 T2 bins. They sampled more energetic water: T1 reads 3.20e-08
+  there, 2.7× the 1.20e-08 elsewhere. Within those files the median
+  `chiMean` moves ×0.97.
+* **The fallback share rises** because only T1 can pass QC in those files.
+  669 bins (0.6%) go from QC-pass to fallback, all inside the eight files,
+  where only T2 had passed. Outside them no flag and no `chiMean` changes.
+  The flipped bins are low-χ (median `chiMean` 1.4e-09, against 5.5e-09 for
+  the QC-pass set), which is why the QC-pass median rises.
+* **The bbl and hab trees move alike:** ×0.99 combined, ×1.02-1.03 QC-pass,
+  +0.6-0.7 points of fallback, and Γ within ±0.001.
+* **The 2021 tables above predate the exclusion.**
+
+In 2022 Pelican this noise, though present in every file, is not corrected,
+because no χ bias is found there. Its cause is not known (#277).
+
+A noise model anchored to the observed floor (#273) needs a band above the
+signal and below where the model turns to ADC noise. On a 512 Hz VMP that is
+~100–130 Hz, in windows whose Batchelor cutoff lies well below it. The
+60–100 Hz used for the gliders sits well above the signal at ~0.4 m/s, but
+not at ~1.1 m/s. The measurement is on #273.
 
 ## Reprocessed 2026-10-20 on main 98b4206
 
