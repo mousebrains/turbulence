@@ -229,6 +229,61 @@ class TestStorageTypes:
                     assert ds.variables[name.replace(" ", "_")].dtype == np.float32, name
 
 
+_FP07 = ("T1", "T2", "T1_dT1", "T2_dT2")
+
+
+@pytest.fixture(scope="module")
+def poly_case(tmp_path_factory) -> Case:
+    """SN479 with its FP07 channels typed "poly" (a linear counts -> C), as Taiwan
+    2013's VMP files are after their in-situ calibration against an SBE3."""
+    d = tmp_path_factory.mktemp("poly")
+    linear = {"type": "poly", "coef0": "20.0", "coef1": "1e-4"}
+    channels = {n: dict(linear) for n in _FP07}
+    spec = cp.EditSpec(note="FP07 typed poly", author="test", channels=channels)
+    text, changes = cp.edit_config_text(
+        cp.read_config_text(SN479), spec, add_keys=True, when="2026-11-09 00:00:00"
+    )
+    assert changes
+    p = cp.write_patched_pfile(SN479, d / "SN479_poly.p", text)
+    return _build_case(p, d)
+
+
+class TestAStatedTypeDoesNotDemoteAnFP07:
+    """chi reads its FP07s by name, so the name decides their storage, not a
+    stated "poly" type, which had left them float32 (#278 follow-up)."""
+
+    def test_the_fixture_states_poly(self, poly_case):
+        pf = poly_case.pf
+        assert all(pf.channel_info[n]["type"] == "poly" for n in _FP07)
+        assert pf.is_fast("T1_dT1") and pf.is_fast("T2_dT2")
+
+    def test_float64_and_exact_on_both_routes(self, poly_case):
+        pf = poly_case.pf
+        fast = [n for n in _FP07 if pf.is_fast(n)]
+        for path in (*poly_case.from_p, *poly_case.from_nc):
+            with netCDF4.Dataset(str(path)) as ds:
+                t = ds.variables["t_fast"][:]
+                start = int(np.searchsorted(pf.t_fast, t[0]))
+                for name in fast:
+                    var = ds.variables[name]
+                    assert var.dtype == np.float64, (path.name, name)
+                    expect = pf.channels[name][start : start + t.size]
+                    assert _same(np.ma.filled(var[:], np.nan), expect), (path.name, name)
+
+    def test_the_l1_file_stores_them_float64(self, poly_case):
+        pf = poly_case.pf
+        with netCDF4.Dataset(str(poly_case.l1)) as ds:
+            g = ds.groups["L1_converted"]
+            assert "TEMP" not in g.variables  # no "therm" channel to put there
+            for name in (n for n in _FP07 if pf.is_fast(n)):
+                assert g.variables[name].dtype == np.float64, name
+                assert g.variables[name].sensor_type == "poly"
+
+    def test_the_routes_stay_bit_identical(self, poly_case):
+        for a, b in zip(poly_case.from_p, poly_case.from_nc, strict=True):
+            _assert_same_variables(a, b)
+
+
 class TestInverse:
     """:func:`l1_native_channels` against the PFile the L1 file came from."""
 
