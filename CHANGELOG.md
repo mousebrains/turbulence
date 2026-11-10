@@ -388,6 +388,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   warns).
 
 ### Fixed
+- **chi's FP07 noise model on generic defaults is no longer silent (issue
+  #282).** The noise model takes `e_b`, `b`, `g`, `adc_fs`, `adc_bits`,
+  `beta_1` and `t_0` from the thermistor's configuration section and replaced
+  any it did not find by `FP07NoiseConfig`'s defaults (0.68, 1, 6, 4.096, 16,
+  3000, 289.3 K) without a word; only a per-profile file written before the
+  calibration attributes warned. A section typed other than `therm` carries
+  none of them.
+  - **Now:** chi warns, naming the keys in the configuration's spelling and
+    the section they are read from (the base thermistor's: `T1` for `T1_dT1`).
+    The chi product records each channel's defaulted keys in
+    `fp07_noise_defaults_<channel>`, written only when there are any, so every
+    other product is unchanged. perturb's run summary has a `notice:` line
+    naming the files by output stem. Like the FP07
+    factory-coefficient notice, it names the files processed in that run; a
+    file the cache skips keeps the mark on its products. `beta_2` is not
+    required (without one the curve is linear), and `T_0`/`beta_1` from
+    perturb's in-situ fit count as given. No number changes: the Taiwan 2013
+    VMP rebuilt with it is bit-identical in all 249 files and 6,795 variables.
+  - **Scope:** 158 FP07 channel sections on SeaChest (one `.p` from each of 117
+    directories, plus the repo's `VMP/`) carry all seven. Only the Taiwan 2013
+    VMP's `poly` channels carry none, and no section has a partial set.
+  - **What it does there:** the default bridge converts counts at 1.70-1.98
+    mK/count where the beads' calibration gives 1.15-1.35, so the model is
+    ~2.1x too high in power on sensitivity alone. The unit's electronics are
+    noisier than the defaults, which partly offsets that: in the quietest tenth
+    of windows (shear epsilon <= 1.6e-10, 1,352 windows) the observed floor is
+    1.05-1.4x the model at 40-80 Hz and 1.8-2.2x at 98 Hz, the top of the chi
+    band. So giving the model the beads' slope alone would make it worse
+    (2.2-4.5x too low). Scaled to that floor in two scratch reruns, per-window
+    `chiMean` moves by a median x0.998-0.999 (5th percentile x0.91), 7-76 of
+    13,518 windows lose a chi, the combined median moves by 0 to +1.2%, and
+    Gamma goes from 0.247 to 0.245-0.246. These are upper bounds, since that
+    floor may still hold some signal. The products stand. The broad 130-190 Hz
+    hump above the chi band (peak ~240-280x at 166-170 Hz in quiet windows) is
+    not a line, and a shifted anti-alias corner does not fit it. Cause unknown.
+  - **Not covered:** the interactive viewers (`rsi/window.py`) build their noise
+    model from defaults whatever the configuration, as before. A `diff_gain`
+    missing from a `T*_dT*` section also still defaults silently (0.94); it is
+    always 0.94 on the first-difference route.
 - **A fast FP07 channel is float64 by its name, whatever its stated type
   (#278, follow-up to #279).** #279 judged a channel by its `sensor_type` and
   fell back on the names only when the type was missing, but chi selects its
@@ -412,7 +451,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     (median over windows and probes; 200-210 Hz: 8.0x to 4.6x). What is left
     was there before and is not rounding: 2-7x the model from 60 to 130 Hz
     (median 7.3x over 100-130 Hz) and a peak of ~265x at 160-170 Hz, the same
-    on both. Not investigated.
+    on both. Investigated in #282 (the entry above): the noise model there runs
+    on generic defaults, but they are not the cause. In the quietest windows the
+    spectra sit 1.05-2.2x the model across the chi band, the unit's own floor;
+    the larger all-window medians presumably add signal.
 - **Per-profile NetCDFs store the fast FP07 channels as float64 (issue
   #278).** `extract_profiles` (perturb's `profiles_NN/`, `rsi-tpw prof`) wrote
   every channel as float32.

@@ -79,6 +79,50 @@ BEAD_COEFFS_SOURCE_ATTR = "bead_coefficients_source"
 # warning) and the window gets no chi. Written only when nonzero.
 BEAD_INVERSION_UNSOLVED_ATTR = "bead_inversion_unsolved_windows"
 
+# The noise-model constants a thermistor's calibration must supply (#282). Any
+# that it does not are replaced by FP07NoiseConfig's generic defaults (e_b 0.68,
+# b 1, gain 6, adc_fs 4.096, adc_bits 16, beta_1 3000, T_0 289.3 K), so the noise
+# level is no longer this instrument's. A section typed other than "therm" (the
+# Taiwan 2013 VMP's in-situ "poly" FP07s) carries none of them. beta_2 is not
+# here: without one the curve is linear, which is legitimate. T_0/beta_1 from an
+# in-situ fit count as supplied.
+NOISE_MODEL_KEYS = ("e_b", "b", "gain", "adc_fs", "adc_bits", "beta_1", "T_0")
+
+# Chi-file attr (``<prefix>_<channel>``): the NOISE_MODEL_KEYS that channel's
+# noise model took from the defaults, space-separated. Written only when there
+# are any, so a product whose calibration supplied them all is unchanged.
+NOISE_DEFAULTS_ATTR = "fp07_noise_defaults"
+
+
+def _noise_defaults(cal: Mapping[str, Any]) -> list[str]:
+    """The :data:`NOISE_MODEL_KEYS` missing from a noise calibration (#282)."""
+    return [k for k in NOISE_MODEL_KEYS if k not in cal]
+
+
+# NOISE_MODEL_KEYS spelled as the configuration file spells them.
+_NOISE_CONFIG_SPELLING = {"gain": "g", "T_0": "t_0"}
+
+
+def describe_noise_defaults(defaults: Mapping[str, Sequence[str]]) -> str:
+    """*defaults* (channel -> defaulted :data:`NOISE_MODEL_KEYS`) for a person.
+
+    In the configuration's spelling (``g``, ``t_0``) and naming the section the
+    keys are read from: the base thermistor's (``T1`` for ``T1_dT1``), so a fix
+    goes where it takes effect. Channels missing the same keys share one clause.
+    """
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for name, keys in defaults.items():
+        groups.setdefault(tuple(keys), []).append(name)
+    clauses = []
+    for keys, names in groups.items():
+        spelled = ", ".join(_NOISE_CONFIG_SPELLING.get(k, k) for k in keys)
+        bases = [_base_therm_name(n) for n in names]
+        clause = f"{spelled} in section{'s' if len(bases) > 1 else ''} {', '.join(bases)}"
+        if bases != names:
+            clause += f" (read for {', '.join(names)})"
+        clauses.append(clause)
+    return "; ".join(clauses)
+
 
 def resolve_tau_scales(
     therm_names: list[str], tau_scale: Mapping[str, float] | None
@@ -305,6 +349,13 @@ def _compute_chi(
     if n_therm == 0:
         raise ValueError("No thermistor gradient channels found")
 
+    # Noise-model constants the calibration did not supply (#282): never silent.
+    noise_defaults = {
+        name: missing
+        for name, cal in zip(therm_names, therm_cal, strict=True)
+        if (missing := _noise_defaults(cal))
+    }
+
     pair_corr = None
     if fp07_response:
         pair_corr = _select_pair_correction(
@@ -340,6 +391,14 @@ def _compute_chi(
     )
     if prepared is None:
         return []
+    if noise_defaults:
+        logger.warning(
+            "%s: chi's FP07 noise model found no %s, so it uses the generic "
+            "defaults (FP07NoiseConfig) and the noise level is not this "
+            "instrument's; chi near the noise floor is affected (#282)",
+            Path(str(data["metadata"].get("source", ""))).name,
+            describe_noise_defaults(noise_defaults),
+        )
     (profiles_slow, speed_fast, P_fast, T_fast, sal_fast, fs_fast, _fs_slow, ratio, t_fast) = (
         prepared
     )
@@ -532,6 +591,10 @@ def _compute_chi(
                 n_unsolved = _count_unsolved_inversions(l3_chi.temp, noise_cal[ci])
                 if n_unsolved:
                     ds.attrs[f"{BEAD_INVERSION_UNSOLVED_ATTR}_{name}"] = n_unsolved
+        # Which thermistors' noise model ran on generic defaults, and for which
+        # constants (#282). Only those: a fully calibrated file is unchanged.
+        for name, keys in noise_defaults.items():
+            ds.attrs[f"{NOISE_DEFAULTS_ATTR}_{name}"] = " ".join(keys)
         if pair_attrs:
             ds.attrs.update(pair_attrs)
             ds.attrs["fp07_tau_model"] = default_tau_model(fp07_model)

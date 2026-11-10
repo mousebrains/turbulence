@@ -98,7 +98,7 @@ so one could charge), verified against SN 412's own working casts to within
 All 54 runs were rebuilt with `microstructure-tpw 0.4.0 (git
 v0.4.0-66-g92938ae9b492)`, stamped in every product, with the same configs as
 the 8748b90 set (2021 WaltonSmith SN142's carry the eight-file T2 exclusion of
-open PR #276, applied 2026-11-08), for #278 (PR #279): the per-profile files now store the fast FP07 channels as
+PR #276, merged 6175f88; applied 2026-11-08), for #278 (PR #279): the per-profile files now store the fast FP07 channels as
 float64. float32 rounding noise, differentiated, rose as f² and lifted χ
 spectra above ~160 Hz; the χ band ends at 98 Hz. Paired per window against
 the 8748b90 set (top-down trees every 5th profile file, the others every
